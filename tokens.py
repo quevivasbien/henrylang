@@ -1,43 +1,49 @@
-from enum import Enum
+from enum import Enum, auto
 
 class TokenType(Enum):
-    LPAREN = 1
-    RPAREN = 2
-    LBRACE = 3
-    RBRACE = 4
+    LPAREN = auto()
+    RPAREN = auto()
+    LBRACE = auto()
+    RBRACE = auto()
 
-    COMMA = 5
-    COLON = 6
-    SEMICOLON = 7
+    COMMA = auto()
+    COLON = auto()
+    SEMICOLON = auto()
 
-    EQ = 8
-    NEQ = 9
-    GT = 10
-    LT = 11
-    GEQ = 12
-    LEQ = 13
+    EQ = auto()
+    NEQ = auto()
+    GT = auto()
+    LT = auto()
+    GEQ = auto()
+    LEQ = auto()
 
-    ASSIGN = 14
+    PLUS = auto()
+    MINUS = auto()
+    SLASH = auto()
+    STAR = auto()
 
-    IDENT = 15
-    INT = 16
-    FLOAT = 17
-    STR = 18
+    ASSIGN = auto()
+    BANG = auto()
+    COMMENT = auto()
+    NEWLINE = auto()
 
-    AND = 19
-    OR = 20
-    TYPE = 21
-    FUNC = 22
-    IF = 23
-    ELSE = 24
-    WHILE = 25
-    TRUE = 26
-    FALSE = 27
+    IDENT = auto()
+    INT = auto()
+    FLOAT = auto()
+    STR = auto()
 
-    COMMENT = 28
-    NEWLINE = 29
+    AND = auto()
+    OR = auto()
+    TYPE = auto()
+    FUNC = auto()
+    IF = auto()
+    ELSE = auto()
+    WHILE = auto()
+    TRUE = auto()
+    FALSE = auto()
 
-    EOF = 30
+    EOF = auto()
+
 
 SINGLE_TOKENS = {
     '(': TokenType.LPAREN,
@@ -50,6 +56,11 @@ SINGLE_TOKENS = {
     '=': TokenType.EQ,
     '>': TokenType.GT,
     '<': TokenType.LT,
+    '+': TokenType.PLUS,
+    '-': TokenType.MINUS,
+    '/': TokenType.SLASH,
+    '*': TokenType.STAR,
+    '!': TokenType.BANG,
     '?': TokenType.COMMENT,
 }
 
@@ -74,4 +85,5 @@ class Token:
         self.line = line
 
     def __repr__(self):
-        return f'Token({self.ttype}, {self.lexeme}, {self.literal}, {self.line})'
+        # return f'Token({self.ttype}, {self.lexeme}, {self.literal}, {self.line})'
+        return self.lexeme

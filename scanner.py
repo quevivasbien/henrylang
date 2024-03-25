@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from tokens import SINGLE_TOKENS, KEYWORDS, TokenType, Token
 
@@ -55,9 +55,9 @@ class Scanner:
                 self.advance()
         value = self.source[self.start:self.current]
         if '.' in value:
-            self.add_token(TokenType.FLOAT, value)
+            self.add_token(TokenType.FLOAT, float(value))
         else:
-            self.add_token(TokenType.INT, value)
+            self.add_token(TokenType.INT, int(value))
 
     def scan_identifier(self):
         while self.peek().isalnum() or self.peek() == '_':

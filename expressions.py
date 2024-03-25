@@ -1,66 +1,78 @@
-import pyparsing as pp
+from tokens import TokenType, Token
 
-from .common import *
+class Expression:
+    pass
 
-expression = pp.Forward()
-
-class LiteralValue:
-    def __init__(self, t):
-        self.value = t[0]
+class Binary(Expression):
+    def __init__(self, left: Expression, operator: Token, right: Expression):
+        self.left = left
+        self.operator = operator
+        self.right = right
 
     def __repr__(self):
-        return f'LiteralValue({self.value})'
+        return f'({self.left} {self.operator} {self.right})'
+
+    def eval(self):
+        left = self.left.eval()
+        right = self.right.eval()
+
+        if self.operator.ttype == TokenType.PLUS:
+            return left + right
+        elif self.operator.ttype == TokenType.MINUS:
+            return left - right
+        elif self.operator.ttype == TokenType.STAR:
+            return left * right
+        elif self.operator.ttype == TokenType.SLASH:
+            return left / right
+        elif self.operator.ttype == TokenType.GT:
+            return left > right
+        elif self.operator.ttype == TokenType.LT:
+            return left < right
+        elif self.operator.ttype == TokenType.GEQ:
+            return left >= right
+        elif self.operator.ttype == TokenType.LEQ:
+            return left <= right
+        elif self.operator.ttype == TokenType.EQ:
+            return left == right
+        elif self.operator.ttype == TokenType.NEQ:
+            return left != right
+        
+        return None
+
+class Grouping(Expression):
+    def __init__(self, expression: Expression):
+        self.expression = expression
+
+    def __repr__(self):
+        return f'({self.expression})'
     
-    def python(self):
+    def eval(self):
+        return self.expression.eval()
+
+class Literal(Expression):
+    def __init__(self, value: Token):
+        self.value = value
+
+    def __repr__(self):
+        return str(self.value)
+    
+    def eval(self):
         return self.value
-
-literal_value = (pp.Word(pp.nums + ".") | ident | pp.QuotedString(quoteChar='"', esc_char='\\')).add_parse_action(LiteralValue)
-
-class Assignment:
-    def __init__(self, t):
-        self.name = t[0]
-        self.value = t[2]
     
-    def __repr__(self):
-        return f'Assignment({self.name}, {self.value})'
-    
-    def python(self):
-        return f'{self.name} = {self.value.python()}'
-
-assignment = (ident + ASSIGN_EQ + expression).add_parse_action(Assignment)
-
-class Comparison:
-    def __init__(self, t):
-        self.lhs = t[0]
-        self.op = t[1]
-        self.rhs = t[2]
+class Unary(Expression):
+    def __init__(self, operator: Token, right: Expression):
+        self.operator = operator
+        self.right = right
 
     def __repr__(self):
-        return f'Comparison({self.lhs}, {self.op}, {self.rhs})'
+        return f'({self.operator}{self.right})'
     
-    def python(self):
-        return f'{self.lhs.python()} {self.op} {self.rhs.python()}'
+    def eval(self):
+        right = self.right.eval()
 
-comparison = (literal_value + (GE | LE | GEQ | LEQ) + literal_value).set_parse_action(Comparison)
-
-block = pp.Forward()
-function_def = pp.Forward()
-function_call = pp.Forward()
-expression <<= function_def | block | function_call | assignment | comparison | literal_value
-
-class Block(Nestable):
-    def __init__(self, t):
-        self.expressions = list(t)
-        super().__init__()
-
-    def __repr__(self):
-        return f'Block({self.expressions})'
-    
-    def children(self):
-        return self.expressions
-    
-    def python(self):
-        indent = ' ' * self.depth * 4
-        return '\n'.join(indent + e.python() for e in self.expressions)
-
-block <<= (LBRACE + pp.ZeroOrMore(expression) + RBRACE).add_parse_action(Block)
+        if self.operator.ttype == TokenType.MINUS:
+            return -right
+        elif self.operator.ttype == TokenType.BANG:
+            return not right
+        
+        return None
