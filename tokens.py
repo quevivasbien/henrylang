@@ -38,7 +38,6 @@ class TokenType(Enum):
     FUNC = auto()
     IF = auto()
     ELSE = auto()
-    WHILE = auto()
     TRUE = auto()
     FALSE = auto()
 
@@ -71,7 +70,6 @@ KEYWORDS = {
     'func': TokenType.FUNC,
     'if': TokenType.IF,
     'else': TokenType.ELSE,
-    'while': TokenType.WHILE,
     'true': TokenType.TRUE,
     'false': TokenType.FALSE,
 }

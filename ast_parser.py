@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 import expressions
 from expressions import Expression
@@ -13,8 +13,8 @@ class Parser:
         self.current = 0
         self.had_error = False
 
-    def peek(self) -> Token:
-        return self.tokens[self.current]
+    def peek(self, offset: int = 0) -> Token:
+        return self.tokens[self.current + offset]
 
     def is_at_end(self) -> bool:
         return self.peek().ttype == TokenType.EOF
@@ -40,6 +40,7 @@ class Parser:
     
     def error(self, token: Token, message: str):
         self.had_error = True
+        message = f'line {token.line}: {message}'
         return ParseException(message)
     
     def consume(self, ttype: TokenType, message: str) ->Token:
@@ -48,14 +49,21 @@ class Parser:
         raise self.error(self.peek(), message)
     
     def primary(self) -> Expression:
+        # match true or false
         if self.match(TokenType.FALSE):
             return expressions.Literal(False)
         if self.match(TokenType.TRUE):
             return expressions.Literal(True)
         
+        # match literals
         if self.match(TokenType.INT, TokenType.FLOAT, TokenType.STR):
             return expressions.Literal(self.previous().literal)
+        
+        # match identifiers
+        if self.match(TokenType.IDENT):
+            return expressions.Variable(self.previous())
 
+        # match grouping
         if self.match(TokenType.LPAREN):
             expr = self.expression()
             self.consume(TokenType.RPAREN, "Expect ')' after expression.")
@@ -116,24 +124,43 @@ class Parser:
                 TokenType.TYPE,
                 TokenType.FUNC,
                 TokenType.IF,
-                TokenType.WHILE,
             ):
                 return
             self.advance()
 
-    def parse(self) -> Optional[Expression]:
-        try:
-            return self.expression()
-        except ParseException:
-            self.synchronize()
-            return None
+    def statement(self) -> Expression:
+        # match variable assignment
+        if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
+            name = self.consume(TokenType.IDENT, "Expect variable name.")
+            self.consume(TokenType.ASSIGN, "Expect '=' after variable name.")
+            expr = self.expression()
+            self.consume(TokenType.NEWLINE, "Expect newline after statement.")
+            return expressions.Assignment(name, expr)
+        # match basic expression
+        expr = self.expression()
+        self.consume(TokenType.NEWLINE, "Expect newline after statement.")
+        return expr
+
+    def parse(self) -> List[Expression]:
+        statements = []
+        while not self.is_at_end():
+            try:
+                statements.append(self.statement())
+            except ParseException as e:
+                print(e)
+                self.synchronize()
+        
+        return statements
 
 
 if __name__ == '__main__':
     from scanner import Scanner
-    tokens = Scanner("1 + 2 * 3 if { hello }").scan()
+    from state import State
+    tokens = Scanner('x := "taco"\ny := x\ny = "taco"\n').scan()
     parser = Parser(tokens)
-    expr = parser.parse()
-    print(expr)
-    print(expr.eval())
+    statements = parser.parse()
+    state = State()
+    for statement in statements:
+        print(statement)
+        print(statement.eval(state))
         

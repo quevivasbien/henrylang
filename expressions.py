@@ -1,3 +1,4 @@
+from state import State
 from tokens import TokenType, Token
 
 class Expression:
@@ -12,9 +13,9 @@ class Binary(Expression):
     def __repr__(self):
         return f'({self.left} {self.operator} {self.right})'
 
-    def eval(self):
-        left = self.left.eval()
-        right = self.right.eval()
+    def eval(self, state: State):
+        left = self.left.eval(state)
+        right = self.right.eval(state)
 
         if self.operator.ttype == TokenType.PLUS:
             return left + right
@@ -46,8 +47,8 @@ class Grouping(Expression):
     def __repr__(self):
         return f'({self.expression})'
     
-    def eval(self):
-        return self.expression.eval()
+    def eval(self, state: State):
+        return self.expression.eval(state)
 
 class Literal(Expression):
     def __init__(self, value: Token):
@@ -56,7 +57,7 @@ class Literal(Expression):
     def __repr__(self):
         return str(self.value)
     
-    def eval(self):
+    def eval(self, state: State):
         return self.value
     
 class Unary(Expression):
@@ -67,8 +68,8 @@ class Unary(Expression):
     def __repr__(self):
         return f'({self.operator}{self.right})'
     
-    def eval(self):
-        right = self.right.eval()
+    def eval(self, state: State):
+        right = self.right.eval(state)
 
         if self.operator.ttype == TokenType.MINUS:
             return -right
@@ -76,3 +77,26 @@ class Unary(Expression):
             return not right
         
         return None
+
+class Variable(Expression):
+    def __init__(self, name: Token):
+        self.name = name
+
+    def __repr__(self):
+        return str(self.name)
+    
+    def eval(self, state: State):
+        return state.get(self.name.lexeme)
+
+class Assignment(Expression):
+    def __init__(self, name: Token, value: Expression):
+        self.name = name
+        self.value = value
+
+    def __repr__(self):
+        return f'({self.name} := {self.value})'
+    
+    def eval(self, state: State):
+        value = self.value.eval(state)
+        state.set(self.name.lexeme, value)
+        return value
