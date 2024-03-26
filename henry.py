@@ -19,6 +19,7 @@ if __name__ == '__main__':
     statements = parser.parse()
     state = hl.State()
 
+    value = hl.typedefs.Null()
     for statement in statements:
         if verbose:
             print(statement)

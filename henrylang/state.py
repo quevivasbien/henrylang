@@ -1,11 +1,12 @@
-from typing import Optional, Self
+from __future__ import annotations
+from typing import Any, Dict, Optional
 
 class RuntimeError(Exception):
     pass
 
 class State:
-    def __init__(self, parent: Optional[Self] = None):
-        self.values = dict()
+    def __init__(self, parent: Optional[State] = None):
+        self.values: Dict[str, Any] = dict()
         self.parent = parent
 
     def get(self, name):

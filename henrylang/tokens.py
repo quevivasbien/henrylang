@@ -5,6 +5,7 @@ class TokenType(Enum):
     RPAREN = auto()
     LBRACE = auto()
     RBRACE = auto()
+    VBAR = auto()
 
     COMMA = auto()
     COLON = auto()
@@ -35,7 +36,6 @@ class TokenType(Enum):
     AND = auto()
     OR = auto()
     TYPE = auto()
-    FUNC = auto()
     IF = auto()
     ELSE = auto()
     TRUE = auto()
@@ -50,7 +50,8 @@ SINGLE_TOKENS = {
     '(': TokenType.LPAREN,
     ')': TokenType.RPAREN,
     '{': TokenType.LBRACE,
-    '}': TokenType.RBRACE,
+    '}': TokenType.RBRACE,  
+    '|': TokenType.VBAR,
     ',': TokenType.COMMA,
     ':': TokenType.COLON,
     ';': TokenType.SEMICOLON,
@@ -69,7 +70,6 @@ KEYWORDS = {
     'and': TokenType.AND,
     'or': TokenType.OR,
     'type': TokenType.TYPE,
-    'func': TokenType.FUNC,
     'if': TokenType.IF,
     'else': TokenType.ELSE,
     'true': TokenType.TRUE,

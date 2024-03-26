@@ -49,6 +49,47 @@ class Parser:
         raise self.error(self.peek(), message)
     
     def primary(self) -> Expression:
+        # match for loop
+        if self.match(TokenType.FOR):
+            name = self.consume(TokenType.IDENT, "Expect variable name.")
+            self.consume(TokenType.ASSIGN, "Expect ':=' after variable name.")
+            value = self.statement()
+            inner = self.statement()
+            return expressions.For(name, value, inner)
+        # match if statement
+        if self.match(TokenType.IF):
+            if_ = (self.statement(), self.statement())
+            elseifs = []
+            else_ = None
+            while self.match(TokenType.ELSE):
+                if self.match(TokenType.IF):
+                    elseifs.append((self.statement(), self.statement()))
+                else:
+                    else_ = self.statement()
+                    break
+            return expressions.If(if_, elseifs, else_)
+        # match variable assignment
+        if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
+            name = self.advance()
+            self.advance()
+            expr = self.statement()
+            return expressions.Assignment(name, expr)
+        # match block
+        if self.match(TokenType.LBRACE):
+            statements = []
+            while not self.check(TokenType.RBRACE) and not self.is_at_end():
+                statements.append(self.statement())
+            self.consume(TokenType.RBRACE, "Expect '}' after block.")
+            return expressions.Block(statements)
+        # match function definition
+        if self.match(TokenType.VBAR):
+            params = []
+            while not self.check(TokenType.VBAR) and not self.is_at_end():
+                params.append(self.consume(TokenType.IDENT, "Expect parameter name."))
+            self.consume(TokenType.VBAR, "Expect '|' after parameters.")
+            body = self.statement()
+            return expressions.FunctionDef(params, body)
+
         # match true or false
         if self.match(TokenType.FALSE):
             return expressions.Literal(False)
@@ -71,12 +112,24 @@ class Parser:
         
         raise self.error(self.peek(), "Expect expression.")
     
+    def call(self) -> Expression:
+        expr = self.primary()
+        while self.match(TokenType.LPAREN):
+            args = []
+            if not self.check(TokenType.RPAREN):
+                args.append(self.statement())
+                while self.match(TokenType.COMMA):
+                    args.append(self.statement())
+            self.consume(TokenType.RPAREN, "Expect ')' after arguments.")
+            expr = expressions.FunctionCall(expr, args)
+        return expr
+
     def unary(self) -> Expression:
         while self.match(TokenType.MINUS, TokenType.BANG):
             operator = self.previous()
             right = self.unary()
             return expressions.Unary(operator, right)
-        return self.primary()
+        return self.call()
 
     def factor(self) -> Expression:
         expr = self.unary()
@@ -88,7 +141,7 @@ class Parser:
 
     def term(self) -> Expression:
         expr = self.factor()
-        while self.match(self, TokenType.PLUS, TokenType.MINUS):
+        while self.match(TokenType.PLUS, TokenType.MINUS):
             operator = self.previous()
             right = self.factor()
             expr = expressions.Binary(expr, operator, right)
@@ -146,45 +199,12 @@ class Parser:
             next_ttype = self.peek().ttype
             if next_ttype in (
                 TokenType.TYPE,
-                TokenType.FUNC,
                 TokenType.IF,
             ):
                 return
             self.advance()
 
     def statement(self) -> Expression:
-        # match for loop
-        if self.match(TokenType.FOR):
-            name = self.consume(TokenType.IDENT, "Expect variable name.")
-            self.consume(TokenType.ASSIGN, "Expect ':=' after variable name.")
-            value = self.statement()
-            inner = self.statement()
-            return expressions.For(name, value, inner)
-        # match if statement
-        if self.match(TokenType.IF):
-            if_ = (self.statement(), self.statement())
-            elseifs = []
-            else_ = None
-            while self.match(TokenType.ELSE):
-                if self.match(TokenType.IF):
-                    elseifs.append((self.statement(), self.statement()))
-                else:
-                    else_ = self.statement()
-                    break
-            return expressions.If(if_, elseifs, else_)
-        # match variable assignment
-        if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
-            name = self.advance()
-            self.advance()
-            expr = self.statement()
-            return expressions.Assignment(name, expr)
-        # match block
-        if self.match(TokenType.LBRACE):
-            statements = []
-            while not self.check(TokenType.RBRACE) and not self.is_at_end():
-                statements.append(self.statement())
-            self.consume(TokenType.RBRACE, "Expect '}' after block.")
-            return expressions.Block(statements)
         # match basic expression
         expr = self.expression()
         return expr
@@ -199,17 +219,3 @@ class Parser:
                 self.synchronize()
         
         return statements
-
-
-if __name__ == '__main__':
-    from scanner import Scanner
-    from state import State
-    tokens = Scanner('x:="taco"\ny:=x\n{\ny := "nottaco"\ny = "taco"\n}\ny = "taco"\n').scan()
-    print("Tokens: ", tokens)
-    parser = Parser(tokens)
-    statements = parser.parse()
-    state = State()
-    for statement in statements:
-        print(statement)
-        print(statement.eval(state))
-        

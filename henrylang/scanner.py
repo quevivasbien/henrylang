@@ -6,7 +6,7 @@ from .tokens import SINGLE_TOKENS, KEYWORDS, TokenType, Token
 class Scanner:
     def __init__(self, source: str):
         self.source = source
-        self.tokens = []
+        self.tokens: List[Token] = []
         self.start = 0
         self.current = 0
         self.line = 1

@@ -1,17 +1,13 @@
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
+
+from . import typedefs
 
 from .state import State
 from .tokens import TokenType, Token
 
 class Expression:
-    pass
-
-class Null(Expression):
-    def __repr__(self):
-        return 'null'
-
     def eval(self, state: State):
-        return False
+        raise NotImplementedError
 
 class Binary(Expression):
     def __init__(self, left: Expression, operator: Token, right: Expression):
@@ -53,7 +49,7 @@ class Binary(Expression):
         elif self.operator.ttype == TokenType.TO:
             return range(left, right)
         
-        return None
+        return typedefs.Null()
 
 class Grouping(Expression):
     def __init__(self, expression: Expression):
@@ -66,7 +62,7 @@ class Grouping(Expression):
         return self.expression.eval(state)
 
 class Literal(Expression):
-    def __init__(self, value: Token):
+    def __init__(self, value: Any):
         self.value = value
 
     def __repr__(self):
@@ -91,14 +87,14 @@ class Unary(Expression):
         elif self.operator.ttype == TokenType.BANG:
             return not right
         
-        return Null()
+        return typedefs.Null()
 
 class Variable(Expression):
     def __init__(self, name: Token):
         self.name = name
 
     def __repr__(self):
-        return str(self.name)
+        return f'$({self.name})'
     
     def eval(self, state: State):
         return state.get(self.name.lexeme)
@@ -109,7 +105,7 @@ class Assignment(Expression):
         self.value = value
 
     def __repr__(self):
-        return f'({self.name} := {self.value})'
+        return f'($({self.name}) := {self.value})'
     
     def eval(self, state: State):
         value = self.value.eval(state)
@@ -126,7 +122,7 @@ class Block(Expression):
     
     def eval(self, state: State):
         if not self.statements:
-            return Null()
+            return typedefs.Null()
         inner_state = State(parent=state)
         for statement in self.statements:
             value = statement.eval(inner_state)
@@ -158,7 +154,7 @@ class If(Expression):
         if self.else_ is not None:
             inner_state = State(parent=state)
             return self.else_.eval(inner_state)
-        return Null()
+        return typedefs.Null()
     
 class For(Expression):
     def __init__(self, name: Token, value: Expression, inner: Expression):
@@ -176,3 +172,31 @@ class For(Expression):
             inner_state.set(self.name.lexeme, i)
             out.append(self.inner.eval(inner_state))
         return out
+    
+class FunctionDef(Expression):
+    def __init__(self, params: List[Token], body: Expression):
+        self.params = params
+        self.body = body
+
+    def __repr__(self):
+        params = ' '.join(f'$({param})' for param in self.params)
+        return f'function({params}) {{{self.body}}}'
+    
+    def eval(self, state: State):
+        return typedefs.Function(self.params, self.body)
+
+class FunctionCall(Expression):
+    def __init__(self, caller: Expression, args: List[Expression]):
+        self.caller = caller
+        self.args = args
+
+    def __repr__(self):
+        args = ' '.join(str(arg) for arg in self.args)
+        return f'{self.caller}({args})'
+    
+    def eval(self, state: State):
+        caller = self.caller.eval(state)
+        if isinstance(caller, typedefs.Function):
+            return caller.__call__(*self.args, state=state)
+        raise RuntimeError(f'{caller} is not a function')
+    
