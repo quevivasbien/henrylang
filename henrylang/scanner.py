@@ -1,6 +1,6 @@
 from typing import List
 
-from tokens import SINGLE_TOKENS, KEYWORDS, TokenType, Token
+from .tokens import SINGLE_TOKENS, KEYWORDS, TokenType, Token
 
 
 class Scanner:
@@ -87,6 +87,9 @@ class Scanner:
             return
         if char == ':' and self.match_next('='):
             self.add_token(TokenType.ASSIGN)
+            return
+        if char == '{' and self.match_next('\n'):
+            self.add_token(TokenType.LBRACE)
             return
         
         # match one-character tokens

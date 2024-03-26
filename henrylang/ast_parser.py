@@ -1,8 +1,8 @@
 from typing import List
 
-import expressions
-from expressions import Expression
-from tokens import TokenType, Token
+from . import expressions
+from .expressions import Expression
+from .tokens import TokenType, Token
 
 class ParseException(Exception):
     pass
@@ -129,13 +129,23 @@ class Parser:
             self.advance()
 
     def statement(self) -> Expression:
+        # ignore blank lines
+        if self.peek().ttype == TokenType.NEWLINE:
+            self.advance()
         # match variable assignment
         if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
-            name = self.consume(TokenType.IDENT, "Expect variable name.")
-            self.consume(TokenType.ASSIGN, "Expect '=' after variable name.")
-            expr = self.expression()
-            self.consume(TokenType.NEWLINE, "Expect newline after statement.")
+            name = self.advance()
+            self.advance()
+            expr = self.statement()
             return expressions.Assignment(name, expr)
+        # match block
+        if self.match(TokenType.LBRACE):
+            statements = []
+            while not self.check(TokenType.RBRACE) and not self.is_at_end():
+                statements.append(self.statement())
+            self.consume(TokenType.RBRACE, "Expect '}' after block.")
+            self.consume(TokenType.NEWLINE, "Expect newline after statement.")
+            return expressions.Block(statements)
         # match basic expression
         expr = self.expression()
         self.consume(TokenType.NEWLINE, "Expect newline after statement.")
@@ -156,7 +166,8 @@ class Parser:
 if __name__ == '__main__':
     from scanner import Scanner
     from state import State
-    tokens = Scanner('x := "taco"\ny := x\ny = "taco"\n').scan()
+    tokens = Scanner('x:="taco"\ny:=x\n{\ny := "nottaco"\ny = "taco"\n}\ny = "taco"\n').scan()
+    print("Tokens: ", tokens)
     parser = Parser(tokens)
     statements = parser.parse()
     state = State()

@@ -1,5 +1,7 @@
-from state import State
-from tokens import TokenType, Token
+from typing import List
+
+from .state import State
+from .tokens import TokenType, Token
 
 class Expression:
     pass
@@ -99,4 +101,18 @@ class Assignment(Expression):
     def eval(self, state: State):
         value = self.value.eval(state)
         state.set(self.name.lexeme, value)
+        return value
+    
+class Block(Expression):
+    def __init__(self, statements: List[Expression]):
+        self.statements = statements
+
+    def __repr__(self):
+        statements = ' '.join(str(statement) for statement in self.statements)
+        return f'{{ {statements} }}'
+    
+    def eval(self, state: State):
+        inner_state = State(parent=state)
+        for statement in self.statements:
+            value = statement.eval(inner_state)
         return value

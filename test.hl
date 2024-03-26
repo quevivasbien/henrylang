@@ -1,0 +1,7 @@
+henry := {
+    hen := "lob"
+    ry := "ster"
+    hen + ry
+}
+
+henry
