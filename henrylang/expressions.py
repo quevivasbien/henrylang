@@ -1,10 +1,17 @@
-from typing import List
+from typing import List, Optional, Tuple
 
 from .state import State
 from .tokens import TokenType, Token
 
 class Expression:
     pass
+
+class Null(Expression):
+    def __repr__(self):
+        return 'null'
+
+    def eval(self, state: State):
+        return False
 
 class Binary(Expression):
     def __init__(self, left: Expression, operator: Token, right: Expression):
@@ -39,6 +46,12 @@ class Binary(Expression):
             return left == right
         elif self.operator.ttype == TokenType.NEQ:
             return left != right
+        elif self.operator.ttype == TokenType.AND:
+            return left and right
+        elif self.operator.ttype == TokenType.OR:
+            return left or right
+        elif self.operator.ttype == TokenType.TO:
+            return range(left, right)
         
         return None
 
@@ -78,7 +91,7 @@ class Unary(Expression):
         elif self.operator.ttype == TokenType.BANG:
             return not right
         
-        return None
+        return Null()
 
 class Variable(Expression):
     def __init__(self, name: Token):
@@ -112,7 +125,54 @@ class Block(Expression):
         return f'{{ {statements} }}'
     
     def eval(self, state: State):
+        if not self.statements:
+            return Null()
         inner_state = State(parent=state)
         for statement in self.statements:
             value = statement.eval(inner_state)
         return value
+    
+class If(Expression):
+    def __init__(
+            self,
+            if_: Tuple[Expression, Expression],
+            elseifs: List[Tuple[Expression, Expression]],
+            else_: Optional[Expression],
+    ):
+        self.if_ = if_
+        self.elseifs = elseifs
+        self.else_ = else_
+    
+    def __repr__(self):
+        elseifs = ''.join(' elseif ' + str(elseif) for elseif in self.elseifs)
+        return f'(if {self.if_}{elseifs} else {self.else_})'
+
+    def eval(self, state: State):
+        if self.if_[0].eval(state):
+            inner_state = State(parent=state)
+            return self.if_[1].eval(inner_state)
+        for elseif in self.elseifs:
+            if elseif[0].eval(state):
+                inner_state = State(parent=state)
+                return elseif[1].eval(inner_state)
+        if self.else_ is not None:
+            inner_state = State(parent=state)
+            return self.else_.eval(inner_state)
+        return Null()
+    
+class For(Expression):
+    def __init__(self, name: Token, value: Expression, inner: Expression):
+        self.name = name
+        self.value = value
+        self.inner = inner
+
+    def __repr__(self):
+        return f'(for {self.name} := {self.value} {self.inner})'
+    
+    def eval(self, state: State):
+        out = []
+        for i in self.value.eval(state):
+            inner_state = State(parent=state)
+            inner_state.set(self.name.lexeme, i)
+            out.append(self.inner.eval(inner_state))
+        return out

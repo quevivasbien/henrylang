@@ -93,9 +93,17 @@ class Parser:
             right = self.factor()
             expr = expressions.Binary(expr, operator, right)
         return expr
+    
+    def range(self) -> Expression:
+        expr = self.term()
+        while self.match(TokenType.TO):
+            operator = self.previous()
+            right = self.term()
+            expr = expressions.Binary(expr, operator, right)
+        return expr
 
     def comparison(self) -> Expression:
-        expr = self.term()
+        expr = self.range()
         while self.match(TokenType.GT, TokenType.LT, TokenType.GEQ, TokenType.LEQ):
             operator = self.previous()
             right = self.term()
@@ -110,9 +118,25 @@ class Parser:
             expr = expressions.Binary(expr, operator, right)
 
         return expr
+    
+    def logic_and(self) -> Expression:
+        expr = self.equality()
+        while self.match(TokenType.AND):
+            operator = self.previous()
+            right = self.equality()
+            expr = expressions.Binary(expr, operator, right)
+        return expr
+
+    def logic_or(self) -> Expression:
+        expr = self.logic_and()
+        while self.match(TokenType.OR):
+            operator = self.previous()
+            right = self.logic_and()
+            expr = expressions.Binary(expr, operator, right)
+        return expr
 
     def expression(self) -> Expression:
-        return self.equality()
+        return self.logic_or()
     
     def synchronize(self) -> None:
         self.advance()
@@ -129,9 +153,25 @@ class Parser:
             self.advance()
 
     def statement(self) -> Expression:
-        # ignore blank lines
-        if self.peek().ttype == TokenType.NEWLINE:
-            self.advance()
+        # match for loop
+        if self.match(TokenType.FOR):
+            name = self.consume(TokenType.IDENT, "Expect variable name.")
+            self.consume(TokenType.ASSIGN, "Expect ':=' after variable name.")
+            value = self.statement()
+            inner = self.statement()
+            return expressions.For(name, value, inner)
+        # match if statement
+        if self.match(TokenType.IF):
+            if_ = (self.statement(), self.statement())
+            elseifs = []
+            else_ = None
+            while self.match(TokenType.ELSE):
+                if self.match(TokenType.IF):
+                    elseifs.append((self.statement(), self.statement()))
+                else:
+                    else_ = self.statement()
+                    break
+            return expressions.If(if_, elseifs, else_)
         # match variable assignment
         if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
             name = self.advance()
@@ -144,11 +184,9 @@ class Parser:
             while not self.check(TokenType.RBRACE) and not self.is_at_end():
                 statements.append(self.statement())
             self.consume(TokenType.RBRACE, "Expect '}' after block.")
-            self.consume(TokenType.NEWLINE, "Expect newline after statement.")
             return expressions.Block(statements)
         # match basic expression
         expr = self.expression()
-        self.consume(TokenType.NEWLINE, "Expect newline after statement.")
         return expr
 
     def parse(self) -> List[Expression]:

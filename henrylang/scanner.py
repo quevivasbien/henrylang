@@ -88,9 +88,6 @@ class Scanner:
         if char == ':' and self.match_next('='):
             self.add_token(TokenType.ASSIGN)
             return
-        if char == '{' and self.match_next('\n'):
-            self.add_token(TokenType.LBRACE)
-            return
         
         # match one-character tokens
         ttype = SINGLE_TOKENS.get(char)
@@ -102,7 +99,7 @@ class Scanner:
         if char in ' \r\t':
             return
         if char == '\n':
-            self.add_token(TokenType.NEWLINE)
+            # self.add_token(TokenType.NEWLINE)
             self.line += 1
             return
 

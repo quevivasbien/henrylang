@@ -40,6 +40,8 @@ class TokenType(Enum):
     ELSE = auto()
     TRUE = auto()
     FALSE = auto()
+    FOR = auto()
+    TO = auto()
 
     EOF = auto()
 
@@ -72,6 +74,8 @@ KEYWORDS = {
     'else': TokenType.ELSE,
     'true': TokenType.TRUE,
     'false': TokenType.FALSE,
+    'for': TokenType.FOR,
+    'to': TokenType.TO,
 }
 
 
