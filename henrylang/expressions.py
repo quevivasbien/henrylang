@@ -196,7 +196,7 @@ class FunctionCall(Expression):
     
     def eval(self, state: State):
         caller = self.caller.eval(state)
-        if isinstance(caller, typedefs.Function):
+        if isinstance(caller, typedefs.AbstractFunction):
             return caller.__call__(*self.args, state=state)
         raise RuntimeError(f'{caller} is not a function')
     

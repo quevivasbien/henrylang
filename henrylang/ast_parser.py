@@ -27,10 +27,10 @@ class Parser:
             self.current += 1
         return self.previous()
     
-    def check(self, *types: TokenType) -> bool:
+    def check(self, *types: TokenType, offset: int = 0) -> bool:
         if self.is_at_end():
             return False
-        return self.peek().ttype in types
+        return self.peek(offset).ttype in types
     
     def match(self, *types: TokenType) -> bool:
         if self.check(*types):
@@ -49,13 +49,6 @@ class Parser:
         raise self.error(self.peek(), message)
     
     def primary(self) -> Expression:
-        # match for loop
-        if self.match(TokenType.FOR):
-            name = self.consume(TokenType.IDENT, "Expect variable name.")
-            self.consume(TokenType.ASSIGN, "Expect ':=' after variable name.")
-            value = self.statement()
-            inner = self.statement()
-            return expressions.For(name, value, inner)
         # match if statement
         if self.match(TokenType.IF):
             if_ = (self.statement(), self.statement())
@@ -68,12 +61,14 @@ class Parser:
                     else_ = self.statement()
                     break
             return expressions.If(if_, elseifs, else_)
+        
         # match variable assignment
-        if self.peek().ttype == TokenType.IDENT and self.peek(1).ttype == TokenType.ASSIGN:
+        if self.check(TokenType.IDENT) and self.check(TokenType.ASSIGN, offset=1):
             name = self.advance()
             self.advance()
             expr = self.statement()
             return expressions.Assignment(name, expr)
+        
         # match block
         if self.match(TokenType.LBRACE):
             statements = []
@@ -81,12 +76,16 @@ class Parser:
                 statements.append(self.statement())
             self.consume(TokenType.RBRACE, "Expect '}' after block.")
             return expressions.Block(statements)
+        
         # match function definition
         if self.match(TokenType.VBAR):
             params = []
-            while not self.check(TokenType.VBAR) and not self.is_at_end():
+            while True:
                 params.append(self.consume(TokenType.IDENT, "Expect parameter name."))
-            self.consume(TokenType.VBAR, "Expect '|' after parameters.")
+                if self.check(TokenType.VBAR) or self.is_at_end():
+                    self.consume(TokenType.VBAR, "Expect '|' after parameters.")
+                    break
+                self.consume(TokenType.COMMA, "Expect ',' after parameter name.")
             body = self.statement()
             return expressions.FunctionDef(params, body)
 
