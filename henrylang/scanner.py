@@ -102,6 +102,12 @@ class Scanner:
             # self.add_token(TokenType.NEWLINE)
             self.line += 1
             return
+        
+        # handle comments
+        if char == '?':
+            while self.peek() != '\n' and not self.is_at_end():
+                self.advance()
+            return
 
         # handle literals
         if char == '"':

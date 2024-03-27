@@ -33,6 +33,19 @@ def base_state() -> State:
         return [x for x in l if fn(x, state=state)]
     state.set('filter', typedefs.BuiltinFunction(filter_))
 
+    def reduce_(fn, l, state: Optional[State] = None) -> Any:
+        fn = fn.eval(state)
+        if not isinstance(fn, typedefs.AbstractFunction):
+            raise RuntimeError('Expected a function')
+        l = [expressions.Literal(x) for x in l.eval(state)]
+        if len(l) < 1:
+            raise RuntimeError('Expected at least 1 element')
+        acc = l[0]
+        for i in range(1, len(l)):
+            acc = expressions.Literal(fn(acc, l[i], state=state))
+        return acc
+    state.set('reduce', typedefs.BuiltinFunction(reduce_))
+
     return state
 
 def exec(code: str, verbose: bool = False):

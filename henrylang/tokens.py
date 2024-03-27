@@ -25,7 +25,6 @@ class TokenType(Enum):
 
     ASSIGN = auto()
     BANG = auto()
-    COMMENT = auto()
     NEWLINE = auto()
 
     IDENT = auto()
@@ -63,7 +62,6 @@ SINGLE_TOKENS = {
     '/': TokenType.SLASH,
     '*': TokenType.STAR,
     '!': TokenType.BANG,
-    '?': TokenType.COMMENT,
 }
 
 KEYWORDS = {
