@@ -1,106 +1,60 @@
-use stdio::Cursor;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-
+mod chunk;
+mod compiler;
 mod values;
+mod vm;
 
-#[derive(Debug)]
-#[repr(u8)]
-enum OpCode {
-    Return,
-    Constant,
-}
+use std::env;
+use stdio::Write;
 
-impl From<u8> for OpCode {
-    fn from(value: u8) -> Self {
-        unsafe { std::mem::transmute(value) }
-    }
-}
+pub use chunk::{Chunk, OpCode};
+pub use values::Value;
+pub use vm::{VM, InterpreterError};
 
-#[derive(Debug)]
-enum InterpreterError {
-    CompileError,
-    RuntimeError,
-}
+use compiler::compile;
 
-struct Chunk {
-    name: String,
-    bytes: Vec<u8>,
-    constants: Vec<values::Value>,
-}
-
-impl Chunk {
-    fn new(name: String) -> Self {
-        Self {
-            name,
-            bytes: Vec::new(),
-            constants: Vec::new(),
+fn repl(vm: &mut VM) -> Result<(), InterpreterError> {
+    println!("henry repl");
+    loop {
+        print!("> ");
+        // read user input
+        let mut user_input = String::new();
+        let _ = std::io::stdout().flush();
+        std::io::stdin().read_line(&mut user_input).unwrap();
+        if user_input == "exit\n" {
+            break;
         }
+        let chunk = compile(user_input, "User Input".to_string()).unwrap();
+        vm.run(&chunk)?;
     }
-
-    fn write_opcode(&mut self, opcode: OpCode) {
-        self.bytes.write_u8(opcode as u8).unwrap();
-    }
-    fn add_constant(&mut self, value: values::Value) -> u16 {
-        self.constants.push(value);
-        (self.constants.len() - 1) as u16
-    }
-    fn write_constant(&mut self, idx: u16) {
-        self.write_opcode(OpCode::Constant);
-        self.bytes.write_u16::<BigEndian>(idx).unwrap()
-    }
-
-    fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> values::Value {
-        let index = cursor.read_u16::<BigEndian>().unwrap();
-        self.constants[index as usize]
-    }
-
-    fn disassemble(&self) {
-        println!("== {} ==", self.name);
-        let mut cursor = Cursor::new(self.bytes.as_slice());
-        loop {
-            let pos = cursor.position();
-            let opcode = match cursor.read_u8() {
-                Ok(x) => OpCode::from(x),
-                Err(_) => break,
-            };
-            match opcode {
-                OpCode::Return => {
-                    println!("{:04} RETURN", pos);
-                },
-                OpCode::Constant => {
-                    let constant = self.read_constant(&mut cursor);
-                    println!("{:04} CONSTANT {}", pos, constant);
-                }
-            }
-        }
-    }
-
-    fn interpret(&self) -> Result<(), InterpreterError> {
-        let mut cursor = Cursor::new(&self.bytes);
-        loop {
-            let opcode = match cursor.read_u8() {
-                Ok(x) => OpCode::from(x),
-                Err(_) => return Err(InterpreterError::CompileError),
-            };
-            match opcode {
-                OpCode::Return => {
-                    return Ok(());
-                },
-                _ => {},
-            }
-        }
-    }
+    Ok(())
 }
 
-fn main() {
-    let mut chunk = Chunk::new("Test Chunk".to_string());
-    let idx = chunk.add_constant(1.0);
-    chunk.write_constant(idx);
-    let idx = chunk.add_constant(3.0);
-    chunk.write_constant(idx);
-    chunk.write_opcode(OpCode::Return);
+fn run_file(vm: &mut VM, path: &str) -> Result<(), InterpreterError> {
+    // read file to string
+    let contents = match std::fs::read_to_string(path) {
+        Ok(x) => x,
+        Err(_) => {
+            println!("Could not read file `{}`", path);
+            return Ok(());
+        }
+    };
+    let chunk = compile(contents, path.to_string()).unwrap();
+    vm.run(&chunk)?;
+    Ok(())
+}
 
-    chunk.disassemble();
+fn main() -> Result<(), InterpreterError> {
+    let args = env::args().collect::<Vec<String>>();
 
-    chunk.interpret().unwrap();
+    let mut vm = VM::new();
+    if args.len() == 1 {
+        repl(&mut vm)
+    }
+    else if args.len() == 2 {
+        run_file(&mut vm, &args[1])
+    }
+    else {
+        println!("Usage: `{}` for REPL or `{}` <script>", args[0], args[0]);
+        Ok(())
+    }
 }
