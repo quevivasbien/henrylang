@@ -1,3 +1,5 @@
+use std::ops::{Add, Sub, Mul, Div};
+
 use byteorder::ReadBytesExt;
 
 use crate::{Chunk, OpCode, Value};
@@ -17,9 +19,12 @@ impl VM {
         Self { stack: Vec::new() }
     }
 
-    fn binary_op(&mut self, op: fn(f64, f64) -> f64) -> Result<(), InterpreterError> {
+    fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
         match (self.stack.pop(), self.stack.pop()) {
-            (Some(x), Some(y)) => Ok(self.stack.push(op(x, y))),
+            (Some(x), Some(y)) => match op(y, x) {
+                Ok(x) => Ok(self.stack.push(x)),
+                Err(e) => return Err(InterpreterError::RuntimeError(e.to_string())),
+            },
             _ => Err(InterpreterError::RuntimeError("Line {}: Attempted to perform binary operation on null".to_string())),
         }
     }
@@ -42,7 +47,7 @@ impl VM {
                 OpCode::Return => {
                     match self.stack.pop() {
                         Some(x) => println!("{}", x),
-                        None => println!("null"),
+                        None => println!("{{}}"),
                     }
                     return Ok(());
                 },
@@ -51,16 +56,16 @@ impl VM {
                    self.stack.push(constant);
                 },  
                 OpCode::Add => {
-                    self.binary_op(|x, y| x + y)?;
+                    self.binary_op(Value::add)?;
                 },
                 OpCode::Subtract => {
-                    self.binary_op(|x, y| x - y)?;
+                    self.binary_op(Value::sub)?;
                 },
                 OpCode::Multiply => {
-                   self.binary_op(|x, y| x * y)?; 
+                   self.binary_op(Value::mul)?; 
                 },
                 OpCode::Divide => {
-                    self.binary_op(|x, y| x / y)?;
+                    self.binary_op(Value::div)?;
                 },
                 OpCode::Negate => {
                    match self.stack.pop() {

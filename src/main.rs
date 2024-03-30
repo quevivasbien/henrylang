@@ -27,8 +27,10 @@ fn repl(vm: &mut VM) -> Result<(), InterpreterError> {
         if user_input == "exit\n" {
             break;
         }
-        let chunk = compile(user_input, "User Input".to_string()).unwrap();
-        vm.run(&chunk)?;
+        match compile(user_input, "User Input".to_string()) {
+            Ok(chunk) => vm.run(&chunk)?,
+            Err(e) => println!("{}", e),
+        };
     }
     Ok(())
 }
@@ -42,8 +44,10 @@ fn run_file(vm: &mut VM, path: &str) -> Result<(), InterpreterError> {
             return Ok(());
         }
     };
-    let chunk = compile(contents, path.to_string()).unwrap();
-    vm.run(&chunk)?;
+    match compile(contents, path.to_string()) {
+        Ok(chunk) => vm.run(&chunk)?,
+        Err(e) => println!("{}", e),
+    };
     Ok(())
 }
 

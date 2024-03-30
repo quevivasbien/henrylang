@@ -38,30 +38,27 @@ impl Chunk {
         }
     }
 
-    pub fn write_opcode(&mut self, opcode: OpCode) {
-        self.bytes.write_u8(opcode as u8).unwrap();
-    }
-    pub fn add_constant(&mut self, value: Value) -> Result<u16, &'static str> {
-        self.constants.push(value);
-        let idx = self.constants.len() - 1;
-        if idx > u16::MAX as usize {
-            return Err("Too many constants in one chunk");
-        }
-        Ok(idx as u16)
-    }
-    pub fn write_constant(&mut self, idx: u16) {
-        self.write_opcode(OpCode::Constant);
-        self.bytes.write_u16::<BigEndian>(idx).unwrap()
-    }
-    
-    pub fn write_byte(&mut self, byte: u8, line: usize) {
-        self.bytes.write_u8(byte).unwrap();
+    fn sync_line(&mut self, line: usize) {
         let current_line = self.newlines.len() + 1;
         if line > current_line {
             for _ in current_line..line {
                 self.newlines.push(self.bytes.len());
             }
         }
+    }
+
+    pub fn write_opcode(&mut self, opcode: OpCode, line: usize) {
+        self.bytes.write_u8(opcode as u8).unwrap();
+        self.sync_line(line);
+    }
+    pub fn write_constant(&mut self, value: Value, line: usize) -> Result<(), &'static str> {
+        self.constants.push(value);
+        let idx = self.constants.len() - 1;
+        if idx > u16::MAX as usize {
+            return Err("Too many constants in one chunk");
+        }
+        self.write_opcode(OpCode::Constant, line);
+        self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
     pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> Value {
@@ -97,7 +94,7 @@ impl Chunk {
                 },
                 OpCode::Constant => {
                     let constant = self.read_constant(cursor);
-                    println!("{:04} CONSTANT {}", pos, constant);
+                    println!("{:04} CONSTANT {:?}", pos, constant);
                 },
                 OpCode::Add => {
                     println!("{:04} ADD", pos);

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use enum_iterator::Sequence;
 use lazy_static::lazy_static;
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, Sequence)]
 pub enum TokenType {
     LParen,
     RParen,
