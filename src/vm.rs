@@ -26,10 +26,10 @@ impl VM {
 
     pub fn run(&mut self, chunk: &Chunk) -> Result<(), InterpreterError> {
         let mut cursor = chunk.cursor();
-        #[cfg(feature = "debug-trace")]
+        #[cfg(feature = "debug")]
         let mut cursor_copy = chunk.cursor();
         loop {
-            #[cfg(feature = "debug-trace")]
+            #[cfg(feature = "debug")]
             {
                 println!("{:?}", self.stack);
                 chunk.disassemble_instruction(&mut cursor_copy);

@@ -1,321 +1,104 @@
-use std::collections::HashMap;
+use crate::{OpCode, Chunk, TokenType, Token, scan};
 
-use lazy_static::lazy_static;
-
-use crate::{OpCode, Chunk};
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-enum TokenType {
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    Pipe,
-
-    Comma,
-    Dot,
-    Colon,
-
-    Eq,
-    NEq,
-    GT,
-    LT,
-    GEq,
-    LEq,
-
-    Plus,
-    Minus,
-    Slash,
-    Star,
-
-    Assign,
-    Bang,
-
-    Ident,
-    Int,
-    Float,
-    Str,
-
-    And,
-    Or,
-    Type,
-    If,
-    Else,
-    True,
-    False,
-    To,
-
-    Error,
-    EoF,
-}
-
-lazy_static! {
-    static ref KEYWORDS: HashMap<&'static str, TokenType> = {
-        let mut map = HashMap::new();
-        map.insert("and", TokenType::And);
-        map.insert("or", TokenType::Or);
-        map.insert("type", TokenType::Type);
-        map.insert("if", TokenType::If);
-        map.insert("else", TokenType::Else);
-        map.insert("true", TokenType::True);
-        map.insert("false", TokenType::False);
-        map.insert("to", TokenType::To);
-
-        map
-    };
-}
-
-#[derive(Debug)]
-struct Token {
-    ttype: TokenType,
-    line: usize,
-    text: String,
-}
-
-struct Scanner {
-    source: Vec<char>,
-    start: usize,
+struct Parser<'a, 'b> {
+    tokens: &'a Vec<Token>,
+    chunk: &'b mut Chunk,
     current: usize,
-    line: usize,
+    previous: usize,
+    had_error: bool,
+    panic_mode: bool,
 }
 
-impl Scanner {
-    pub fn new(source: String) -> Self {
+impl<'a, 'b> Parser<'a, 'b> {
+    fn new(tokens: &'a Vec<Token>, chunk: &'b mut Chunk) -> Self {
         Self {
-            source: source.chars().collect(),
-            start: 0,
+            tokens,
+            chunk,
             current: 0,
-            line: 1,
+            previous: 0,
+            had_error: false,
+            panic_mode: false,
         }
     }
-
-    fn is_at_end(&self) -> bool {
-        self.peek(0) == '\0'
+    fn previous_token(&self) -> &'a Token {
+        &self.tokens[self.previous]
     }
-
-    fn peek(&self, offset: usize) -> char {
-        if self.current + offset >= self.source.len() {
-            '\0'
-        }
-        else {
-            self.source[self.current + offset]
-        }
+    fn current_token(&self) -> &'a Token {
+        &self.tokens[self.current]
     }
-
-    fn advance(&mut self) -> char {
-        self.current += 1;
-        self.source[self.current - 1]
+    fn scan_token(&mut self) -> usize {
+        todo!()
     }
-
-    fn match_char(&mut self, expected: char) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        if self.peek(0) != expected {
-            return false;
-        }
-        self.advance();
-        true
-    }
-
-    fn make_token(&self, ttype: TokenType) -> Token {
-        let text: String = self.source[self.start..self.current].iter().collect();
-        Token {
-            ttype,
-            line: self.line,
-            text: text,
-        }
-    }
-
-    fn error_token(&self, message: &'static str) -> Token {
-        Token {
-            ttype: TokenType::Error,
-            line: self.line,
-            text: message.to_string(),
-        }
-    }
-
-    fn handle_comment(&mut self) {
-        if !self.match_char('?') {
+    fn error(&mut self, loc: usize, message: &str) {
+        if self.panic_mode {
             return;
         }
-        while !self.is_at_end() && self.peek(0) != '\n' {
-            self.advance();
+        self.panic_mode = true;
+        let token = &self.tokens[loc];
+        eprint!("Error on line {} ", token.line);
+        if token.ttype == TokenType::EoF {
+            eprint!(" at end")
         }
+        else {
+            eprint!(" at '{}'", token.text)
+        }
+        eprintln!(": {}", message);
+        self.had_error = true;
     }
-
-    fn handle_comments_and_whitespace(&mut self) {
-        while !self.is_at_end() {
-            match self.peek(0) {
-                '\n' => {
-                    self.line += 1;
-                },
-                '?' => self.handle_comment(),
-                x => if !x.is_ascii_whitespace() {
-                    break
-                },
-            };
-            if !self.is_at_end() {
-                self.advance();
-            }
+    fn consume(&mut self, ttype: TokenType, message: &str) {
+        if self.current_token().ttype == ttype {
+            self.advance();
+            return;
         }
+        self.error(self.current, message);
     }
-
-    fn read_string(&mut self) -> Token {
-        while !self.is_at_end() && self.peek(0) != '"' {
-            if self.peek(0) == '\n' {
-                self.line += 1;
-            }
-            self.advance();
-        }
-        if self.is_at_end() {
-            return self.error_token("Unterminated string");
-        }
-        self.advance();
-        self.make_token(TokenType::Str)
+    fn emit_byte(&mut self, byte: u8) {
+        self.chunk.write_byte(byte, self.previous_token().line);
     }
-
-    fn read_number(&mut self) -> Token {
-        while self.peek(0).is_ascii_digit() {
-            self.advance();
-        }
-        if self.peek(0) == '.' && self.peek(1).is_ascii_digit() {
-            self.advance();
-            while self.peek(0).is_ascii_digit() {
-                self.advance();
-            }
-            return self.make_token(TokenType::Float);
-        }
-        self.make_token(TokenType::Int)
+    fn expression(&mut self) {
+        todo!()
     }
-
-    fn read_ident_or_keyword(&mut self) -> Token {
-        while self.peek(0).is_alphanumeric() || self.peek(0) == '_' {
-            self.advance();
-        }
-        let text: String = self.source[self.start..self.current].iter().collect();
-        let ttype = match KEYWORDS.get(text.as_str()) {
-            Some(x) => *x,
-            None => TokenType::Ident,
+    fn number(&mut self) {
+        let value = self.previous_token().text.parse::<f64>().unwrap();
+        let idx = match self.chunk.add_constant(value) {
+            Ok(idx) => idx,
+            Err(e) => return self.error(self.previous, e),
         };
-
-        Token {
-            ttype,
-            line: self.line,
-            text: text,
-        }
+        self.chunk.write_constant(idx);
     }
-
-    fn scan_token(&mut self) -> Token {
-        self.handle_comments_and_whitespace();
-
-        self.start = self.current;
-
-        if self.is_at_end() {
-            return self.make_token(TokenType::EoF);
-        }
-
-        // match single-character tokens
-        let c = self.advance();
-        match c {
-            '(' => return self.make_token(TokenType::LParen),
-            ')' => return self.make_token(TokenType::RParen),
-            '{' => return self.make_token(TokenType::LBrace),
-            '}' => return self.make_token(TokenType::RBrace),
-            '|' => return self.make_token(TokenType::Pipe),
-            '.' => return self.make_token(TokenType::Dot),
-            ',' => return self.make_token(TokenType::Comma),
-            '=' => return self.make_token(TokenType::Eq),
-            '+' => return self.make_token(TokenType::Plus),
-            '-' => return self.make_token(TokenType::Minus),
-            '/' => return self.make_token(TokenType::Slash),
-            '*' => return self.make_token(TokenType::Star),
-            '!' => {
-                let is_neq = self.match_char('=');
-                return self.make_token(
-                    if is_neq {
-                        TokenType::NEq
-                    }
-                    else {
-                        TokenType::Bang
-                    }
-                );
-            },
-            '>' => {
-                let is_geq = self.match_char('=');
-                return self.make_token(
-                    if is_geq {
-                        TokenType::GEq
-                    }
-                    else {
-                        TokenType::GT
-                    }
-                );
-            },
-            '<' => {
-                let is_leq = self.match_char('=');
-                return self.make_token(
-                    if is_leq {
-                        TokenType::LEq
-                    }
-                    else {
-                        TokenType::LT
-                    }
-                );
-            },
-            ':' => {
-                let is_assign = self.match_char('=');
-                return self.make_token(
-                    if is_assign {
-                        TokenType::Assign
-                    }
-                    else {
-                        TokenType::Colon
-                    }
-                );
-            },
-            _ => (),
-        };
-
-        // handle literals
-        if c == '"' {
-            return self.read_string();
-        }
-        if c.is_numeric() {
-            return self.read_number();
-        }
-        if c.is_alphabetic() || c == '_' {
-            return self.read_ident_or_keyword();
-        }
-
-        self.error_token("Unexpected character")
+    fn grouping(&mut self) {
+        self.expression();
+        self.consume(TokenType::RParen, "Expected ')' after expression.");
     }
-
-    pub fn scan(&mut self) -> Result<(), &'static str> {
-        let mut line = 0;
+    fn unary(&mut self) {
+        let operator_type = self.previous_token().ttype;
+        self.expression();
+        self.chunk.write_opcode(match operator_type {
+            TokenType::Minus => OpCode::Negate,
+            _ => unreachable!(),
+        });
+    }
+    fn advance(&mut self) {
+        self.previous = self.current;
         loop {
-            let token = self.scan_token();
-            if token.line != line {
-                line = token.line;
-                print!("{:04}: ", line);
+            self.current = self.scan_token();
+            if self.current_token().ttype == TokenType::Error {
+                break;
             }
-            else {
-                print!("    | ");
-            }
-            println!("{:?}", token);
-            if token.ttype == TokenType::EoF {
-                return Ok(());
-            }
+
+            self.error(self.current, self.current_token().text.as_str());
         }
+    }
+
+    fn parse(&mut self) {
+        self.chunk.write_opcode(OpCode::Return);
     }
 }
 
 pub fn compile(source: String, name: String) -> Result<Chunk, &'static str> {
-    let mut scanner = Scanner::new(source);
-    scanner.scan()?;
-
+    let tokens = scan(source);
     let mut chunk = Chunk::new(name);
-
-    chunk.write_opcode(OpCode::Return);
+    let mut parser = Parser::new(&tokens, &mut chunk);
+    parser.parse();
     Ok(chunk)
 }
