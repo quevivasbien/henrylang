@@ -11,12 +11,12 @@ use stdio::Write;
 use chunk::{Chunk, OpCode};
 use scanner::scan;
 use token::{TokenType, Token};
-use values::Value;
-use vm::{VM, InterpreterError};
+use values::{Value, ObjectString};
+use vm::VM;
 
 use compiler::compile;
 
-fn repl(vm: &mut VM) -> Result<(), InterpreterError> {
+fn repl(vm: &mut VM) {
     println!("henry repl");
     loop {
         print!("> ");
@@ -27,42 +27,45 @@ fn repl(vm: &mut VM) -> Result<(), InterpreterError> {
         if user_input == "exit\n" {
             break;
         }
-        match compile(user_input, "User Input".to_string()) {
-            Ok(chunk) => vm.run(&chunk)?,
-            Err(e) => println!("{}", e),
-        };
+        if let Ok(chunk) = compile(user_input, "User Input".to_string()) {
+            match vm.run(&chunk) {
+                Ok(Some(x)) => println!("{}", x),
+                Ok(None) => (),
+                Err(e) => println!("{:?}", e),
+            }
+        }
     }
-    Ok(())
 }
 
-fn run_file(vm: &mut VM, path: &str) -> Result<(), InterpreterError> {
+fn run_file(vm: &mut VM, path: &str) {
     // read file to string
     let contents = match std::fs::read_to_string(path) {
         Ok(x) => x,
         Err(_) => {
             println!("Could not read file `{}`", path);
-            return Ok(());
+            return;
         }
     };
-    match compile(contents, path.to_string()) {
-        Ok(chunk) => vm.run(&chunk)?,
-        Err(e) => println!("{}", e),
-    };
-    Ok(())
+    if let Ok(chunk) = compile(contents, path.to_string()) {
+        match vm.run(&chunk) {
+            Ok(Some(x)) => println!("{}", x),
+            Ok(None) => (),
+            Err(e) => println!("{:?}", e),
+        }
+    }
 }
 
-fn main() -> Result<(), InterpreterError> {
+fn main() {
     let args = env::args().collect::<Vec<String>>();
 
     let mut vm = VM::new();
     if args.len() == 1 {
-        repl(&mut vm)
+        repl(&mut vm);
     }
     else if args.len() == 2 {
-        run_file(&mut vm, &args[1])
+        run_file(&mut vm, &args[1]);
     }
     else {
         println!("Usage: `{}` for REPL or `{}` <script>", args[0], args[0]);
-        Ok(())
     }
 }

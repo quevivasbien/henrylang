@@ -1,18 +1,38 @@
+use std::rc::Rc;
 use stdio::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::Value;
+use crate::{Value, ObjectString};
 
 #[derive(Debug)]
 #[repr(u8)]
 pub enum OpCode {
     Return,
-    Constant,
+    
+    True,
+    False,
+    
+    // Comparisons
+    Equal,
+    NotEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    
+    // Binary operations
     Add,
     Subtract,
     Multiply,
     Divide,
+    
+    // Unary operations
     Negate,
+    Not,
+    
+    Constant,
+    DefineGlobal,
+    GetGlobal,
 }
 
 impl From<u8> for OpCode {
@@ -51,19 +71,40 @@ impl Chunk {
         self.bytes.write_u8(opcode as u8).unwrap();
         self.sync_line(line);
     }
-    pub fn write_constant(&mut self, value: Value, line: usize) -> Result<(), &'static str> {
+
+
+    pub fn create_constant(&mut self, value: Value) -> Result<u16, &'static str> {
         self.constants.push(value);
         let idx = self.constants.len() - 1;
         if idx > u16::MAX as usize {
             return Err("Too many constants in one chunk");
         }
+        return Ok(idx as u16);
+    }
+    pub fn write_constant(&mut self, value: Value, line: usize) -> Result<(), &'static str> {
+        let idx = self.create_constant(value)?;
         self.write_opcode(OpCode::Constant, line);
         self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
-    pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> Value {
+    pub fn create_define(&mut self, name: String) -> Result<u16, &'static str> {
+        let value = Value::Object(Rc::new(ObjectString::new(name)));
+        self.create_constant(value)
+    }
+    pub fn write_define(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::DefineGlobal, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of variable name to bytes")
+    }
+    pub fn write_get(&mut self, name: String, line: usize) -> Result<(), &'static str> {
+        let name = Value::Object(Rc::new(ObjectString::new(name)));
+        let idx = self.create_constant(name)?;
+        self.write_opcode(OpCode::GetGlobal, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of variable name to bytes")
+    }
+
+    pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> &Value {
         let index = cursor.read_u16::<BigEndian>().unwrap();
-        self.constants[index as usize]
+        &self.constants[index as usize]
     }
 
     pub fn cursor(&self) -> Cursor<&[u8]> {
@@ -92,9 +133,29 @@ impl Chunk {
                 OpCode::Return => {
                     println!("{:04} RETURN", pos);
                 },
-                OpCode::Constant => {
-                    let constant = self.read_constant(cursor);
-                    println!("{:04} CONSTANT {:?}", pos, constant);
+                OpCode::True => {
+                    println!("{:04} TRUE", pos);
+                },
+                OpCode::False => {
+                    println!("{:04} FALSE", pos);
+                },
+                OpCode::Equal => {
+                    println!("{:04} EQUAL", pos);
+                },
+                OpCode::NotEqual => {
+                    println!("{:04} NOTEQUAL", pos);
+                },
+                OpCode::Greater => {
+                    println!("{:04} GREATER", pos);
+                },
+                OpCode::GreaterEqual => {
+                    println!("{:04} GREATEREQUAL", pos);
+                },
+                OpCode::Less => {
+                    println!("{:04} LESS", pos);
+                },
+                OpCode::LessEqual => {
+                    println!("{:04} LESSEQUAL", pos);
                 },
                 OpCode::Add => {
                     println!("{:04} ADD", pos);
@@ -111,6 +172,21 @@ impl Chunk {
                 OpCode::Negate => {
                     println!("{:04} NEGATE", pos);
                 },
+                OpCode::Not => {
+                    println!("{:04} NOT", pos);
+                },
+                OpCode::Constant => {
+                    let constant = self.read_constant(cursor);
+                    println!("{:04} CONSTANT {:?}", pos, constant);
+                },
+                OpCode::DefineGlobal => {
+                    let constant = self.read_constant(cursor);
+                    println!("{:04} DEFINEGLOBAL {:?}", pos, constant);
+                },
+                OpCode::GetGlobal => {
+                    let constant = self.read_constant(cursor);
+                    println!("{:04} GETGLOBAL {:?}", pos, constant);
+                }
             }
             return false
     }

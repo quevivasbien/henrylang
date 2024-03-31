@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "downcast-rs"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
+
+[[package]]
 name = "enum-iterator"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -33,6 +39,7 @@ name = "henrylang"
 version = "0.1.0"
 dependencies = [
  "byteorder",
+ "downcast-rs",
  "enum-iterator",
  "lazy_static",
  "stdio",
