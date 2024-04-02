@@ -11,7 +11,7 @@ use stdio::Write;
 use chunk::{Chunk, OpCode};
 use scanner::scan;
 use token::{TokenType, Token};
-use values::{Value, ObjectString};
+use values::Value;
 use vm::VM;
 
 use compiler::compile;

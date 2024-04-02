@@ -1,8 +1,8 @@
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 
-use crate::{scan, ObjectString, Chunk, OpCode, Token, TokenType, Value};
+use crate::{scan, Chunk, OpCode, Token, TokenType, Value};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -15,8 +15,8 @@ enum Precedence {
     Term,
     Factor,
     Unary,
-    Call,
-    Primary,
+    // Call,
+    // Primary,
 }
 
 impl From<u8> for Precedence {
@@ -222,12 +222,12 @@ impl Compiler {
     fn current_token(&self) -> &Token {
         &self.tokens[self.current]
     }
-    fn next_token(&self) -> Option<&Token> {
-        if self.current + 1 >= self.tokens.len() {
-            return None;
-        }
-        Some(&self.tokens[self.current + 1])
-    }
+    // fn next_token(&self) -> Option<&Token> {
+    //     if self.current + 1 >= self.tokens.len() {
+    //         return None;
+    //     }
+    //     Some(&self.tokens[self.current + 1])
+    // }
     fn error(&mut self, loc: usize, message: Option<&str>) {
         if self.panic_mode {
             return;
@@ -245,13 +245,13 @@ impl Compiler {
         eprintln!(": {}", message);
         self.had_error = true;
     }
-    fn match_token(&mut self, ttype: TokenType) -> bool {
-        if self.current_token().ttype == ttype {
-            self.advance();
-            return true;
-        }
-        false
-    }
+    // fn match_token(&mut self, ttype: TokenType) -> bool {
+    //     if self.current_token().ttype == ttype {
+    //         self.advance();
+    //         return true;
+    //     }
+    //     false
+    // }
     fn advance(&mut self) {
         self.previous = self.current;
         loop {
@@ -294,12 +294,16 @@ impl Compiler {
 
     fn end_scope(&mut self) {
         self.locals.scope_depth -= 1;
+        let mut n_pops = 0;
         while match self.locals.locals.last() {
             Some(local) => local.depth > self.locals.scope_depth,
             None => false,
         } {
-            self.chunk.write_opcode(OpCode::Pop, self.previous_token().line);
+            n_pops += 1;
             self.locals.locals.pop();
+        }
+        if let Err(e) = self.chunk.write_endblock(n_pops, self.previous_token().line) {
+            self.error(self.previous, Some(e));
         }
     }
 
@@ -327,10 +331,19 @@ impl Compiler {
         }
     }
 
-    fn create_local_variable(&mut self, name: String) {
-        // if self.locals.scope_depth == 0 {
-        //     return;
-        // }
+    // then create a constant in the chunk to store the name
+    fn create_variable(&mut self, name: String) -> Option<u16> {
+        if self.locals.scope_depth == 0 {
+            // create a global variable
+            return match self.chunk.create_constant(Value::String(name)) {
+                Ok(idx) => Some(idx),
+                Err(e) => {
+                    self.error(self.previous, Some(e));
+                    None
+                },
+            };
+        }
+        // create a local variable
         let local = Local {
             name,
             depth: self.locals.scope_depth,
@@ -338,36 +351,19 @@ impl Compiler {
         if let Err(e) = self.locals.push(local) {
             self.error(self.previous, Some(e));
         }
-    }
-
-    // write a define opcode that refers to a previously created name constant
-    fn define_global_variable(&mut self, idx: u16) {
-        if self.locals.scope_depth > 0 {
-            return;
-        }
-        if let Err(e) = self.chunk.write_define(idx, self.previous_token().line) {
-            self.error(self.previous, Some(e));
-        }
-    }
-
-    // then create a constant in the chunk to store the name
-    fn create_variable(&mut self, name: String) -> Result<u16, &'static str> {
-        if self.locals.scope_depth > 0 {
-            self.create_local_variable(name);
-            return Ok(0);
-        }
-        self.chunk.create_define(name)
+        None
     }
 
     fn var_declaration(&mut self, name: String) {
-        match self.create_variable(name) {
-            Ok(idx) => {
-                self.consume(TokenType::Assign, "Expected ':=' after variable name.");
-                self.parse_precedence(Precedence::Assignment);
-                self.define_global_variable(idx);
+        let idx = self.create_variable(name);
+        self.consume(TokenType::Assign, "Expected ':=' after variable name.");
+        self.parse_precedence(Precedence::Assignment);
+        match idx {
+            Some(idx) => if let Err(e) = self.chunk.write_set_global(idx, self.previous_token().line) {
+                self.error(self.previous, Some(e));
             },
-            Err(e) => self.error(self.current + 1, Some(e)),
-        };
+            None => self.chunk.write_opcode(OpCode::SetLocal, self.previous_token().line),
+        }
     }
 
     fn expression(&mut self) {
@@ -398,15 +394,13 @@ impl Compiler {
     }
     fn string(&mut self) {
         let text = &self.previous_token().text;
-        let string = Value::Object(Rc::new(
-            ObjectString::new(text[1..text.len() - 1].to_string())
-        ));
+        let string = Value::String(text[1..text.len() - 1].to_string());
         if let Err(e) = self.chunk.write_constant(string, self.previous_token().line) {
             self.error(self.previous, Some(e));
         }
     }
     fn variable(&mut self) {
-        let name = self.previous_token().text.clone();
+        let name = &self.previous_token().text;
         // check whether this is an assignment
         if self.current_token().ttype == TokenType::Assign {
             self.var_declaration(name.clone());

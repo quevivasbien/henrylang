@@ -1,8 +1,7 @@
-use std::rc::Rc;
 use stdio::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::{Value, ObjectString};
+use crate::Value;
 
 #[derive(Debug)]
 #[repr(u8)]
@@ -33,11 +32,12 @@ pub enum OpCode {
     Not,
 
     EndExpr,
+    EndBlock,
     
     Constant,
-    DefineGlobal,
+    SetGlobal,
     GetGlobal,
-    Pop,
+    SetLocal,
     GetLocal,
 }
 
@@ -95,17 +95,12 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
-    pub fn create_define(&mut self, name: String) -> Result<u16, &'static str> {
-        let value = Value::Object(Rc::new(ObjectString::new(name)));
-        self.create_constant(value)
-    }
-    pub fn write_define(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::DefineGlobal, line);
-        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of variable name to bytes")
+    pub fn write_set_global(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::SetGlobal, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable to bytes")
     }
     pub fn write_get_global(&mut self, name: String, line: usize) -> Result<(), &'static str> {
-        let name = Value::Object(Rc::new(ObjectString::new(name)));
-        let idx = self.create_constant(name)?;
+        let idx = self.create_constant(Value::String(name))?;
         self.write_opcode(OpCode::GetGlobal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable name to bytes")
     }
@@ -115,11 +110,16 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of local variable to bytes")
     }
 
-    pub fn read_u16(&self, cursor: &mut Cursor<&[u8]>) -> u16 {
+    pub fn write_endblock(&mut self, n_pops: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::EndBlock, line);
+        self.bytes.write_u16::<BigEndian>(n_pops).map_err(|_| "Failed to write number of pops to bytes")
+    }
+
+    pub fn read_u16(cursor: &mut Cursor<&[u8]>) -> u16 {
         cursor.read_u16::<BigEndian>().unwrap()
     }
     pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> &Value {
-        let index = self.read_u16(cursor);
+        let index = Self::read_u16(cursor);
         &self.constants[index as usize]
     }
 
@@ -128,7 +128,7 @@ impl Chunk {
     }
 
     // figures out line number for a given byte index
-    pub fn line_num(&self, index: usize) -> usize {
+    pub fn _line_num(&self, index: usize) -> usize {
         let mut line_count = 1;
         for &i in self.newlines.iter() {
             if i > index {
@@ -139,7 +139,7 @@ impl Chunk {
         line_count
     }
 
-    pub fn disassemble_instruction(&self, cursor: &mut Cursor<&[u8]>) -> bool {
+    pub fn _disassemble_instruction(&self, cursor: &mut Cursor<&[u8]>) -> bool {
         let pos = cursor.position();
             let opcode = match cursor.read_u8() {
                 Ok(x) => OpCode::from(x),
@@ -200,33 +200,38 @@ impl Chunk {
                 OpCode::EndExpr => {
                     println!("{:04} ENDEXPR", pos);
                 },
+                OpCode::EndBlock => {
+                    let n_pops = Self::read_u16(cursor);
+                    println!("{:04} ENDBLOCK {}", pos, n_pops);
+                }
                 OpCode::Constant => {
                     let constant = self.read_constant(cursor);
                     println!("{:04} CONSTANT {:?}", pos, constant);
                 },
-                OpCode::DefineGlobal => {
-                    let constant = self.read_constant(cursor);
-                    println!("{:04} DEFINEGLOBAL {:?}", pos, constant);
+                OpCode::SetGlobal => {
+                    let name = self.read_constant(cursor);
+                    println!("{:04} SETGLOBAL {:?}", pos, name);
                 },
                 OpCode::GetGlobal => {
-                    let constant = self.read_constant(cursor);
-                    println!("{:04} GETGLOBAL {:?}", pos, constant);
+                    let name = self.read_constant(cursor);
+                    println!("{:04} GETGLOBAL {:?}", pos, name);
                 },
-                OpCode::Pop => {
-                    println!("{:04} POP", pos);
+                OpCode::SetLocal => {
+                    println!("{:04} SETLOCAL", pos);
                 },
                 OpCode::GetLocal => {
-                    println!("{:04} GETLOCAL", pos);
+                    let idx = Self::read_u16(cursor);
+                    println!("{:04} GETLOCAL {}", pos, idx);
                 },
             }
             return false
     }
 
-    pub fn disassemble(&self) {
+    pub fn _disassemble(&self) {
         println!("== {} ==", self.name);
         let mut cursor = self.cursor();
         loop {
-            if self.disassemble_instruction(&mut cursor) {
+            if self._disassemble_instruction(&mut cursor) {
                 break;
             }
         }

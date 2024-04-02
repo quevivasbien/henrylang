@@ -1,8 +1,9 @@
-use std::{collections::HashMap, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}};
+use std::collections::HashMap;
+use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 
 use byteorder::ReadBytesExt;
 
-use crate::{Chunk, OpCode, Value, ObjectString};
+use crate::{Chunk, OpCode, Value};
 
 #[derive(Debug)]
 pub enum InterpreterError {
@@ -10,15 +11,17 @@ pub enum InterpreterError {
     RuntimeError(&'static str),
 }
 
+#[derive(Debug)]
 pub struct VM {
     stack: Vec<Value>,
+    varstack: Vec<Value>,
     globals: HashMap<String, Value>,
     last_value: Option<Value>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::new(), globals: HashMap::new(), last_value: None }
+        Self { stack: Vec::new(), varstack: Vec::new(), globals: HashMap::new(), last_value: None }
     }
 
     fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
@@ -48,8 +51,8 @@ impl VM {
         loop {
             #[cfg(feature = "debug")]
             {
-                println!("{:?}", self.stack);
-                chunk.disassemble_instruction(&mut cursor_copy);
+                println!("{:?}", self);
+                chunk._disassemble_instruction(&mut cursor_copy);
             }
             let opcode = match cursor.read_u8() {
                 Ok(x) => OpCode::from(x),
@@ -77,43 +80,51 @@ impl VM {
                 OpCode::Not => self.unary_op(Value::not)?,
                 OpCode::EndExpr => {
                     self.last_value = self.stack.pop();
-                    // self.last_value = self.stack.last().cloned();
-                }
+                },
+                OpCode::EndBlock => {
+                    let n_pops = Chunk::read_u16(&mut cursor);
+                    self.varstack.truncate(self.varstack.len() - n_pops as usize);
+                    self.stack.push(match &self.last_value {
+                        Some(x) => x.clone(),
+                        None => Value::Bool(false),
+                    });
+                },
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut cursor);
                     self.stack.push(constant.clone());
                 },
-                OpCode::DefineGlobal => {
-                    let name = match &chunk.read_constant(&mut cursor) {
-                        Value::Object(name) => {
-                            &name.downcast_ref::<ObjectString>().unwrap().value
-                        },
-                        _ => unreachable!(),
+                OpCode::SetGlobal => {
+                    let name = chunk.read_constant(&mut cursor);
+                    let name = match name.clone() {
+                        Value::String(name) => name,
+                        _ => unreachable!("Global name was not a string"),
                     };
                     let value = match self.stack.last() {
-                        Some(x) => x,
-                        None => return Err(InterpreterError::RuntimeError("Attempted to define global variable as null")),
+                        Some(x) => x.clone(),
+                        None => return Err(InterpreterError::RuntimeError("Attempted to set null global")),
                     };
-                    self.globals.insert(name.clone(), value.clone());
+                    self.globals.insert(name, value);
                 },
                 OpCode::GetGlobal => {
                     let name = match &chunk.read_constant(&mut cursor) {
-                        Value::Object(name) => {
-                            &name.downcast_ref::<ObjectString>().unwrap().value
-                        },
-                        _ => unreachable!(),
+                        Value::String(name) => name,
+                        _ => unreachable!("Global name was not a string"),
                     };
                     match self.globals.get(name) {
                         Some(x) => self.stack.push(x.clone()),
-                        None => return Err(InterpreterError::RuntimeError("Attempted to access undefined global variable")),
+                        None => return Err(InterpreterError::RuntimeError("Variable is undefined")),
+                    };
+                }
+                OpCode::SetLocal => {
+                    let value = self.stack.last();
+                    match value {
+                        Some(x) => self.varstack.push(x.clone()),
+                        None => return Err(InterpreterError::RuntimeError("Attempted to set null variable")),
                     }
                 },
-                OpCode::Pop => {
-                    self.stack.pop();
-                },
                 OpCode::GetLocal => {
-                    let idx = chunk.read_u16(&mut cursor);
-                    let value = self.stack[idx as usize].clone();
+                    let idx = Chunk::read_u16(&mut cursor);
+                    let value = self.varstack[idx as usize].clone();
                     self.stack.push(value);
                 }
             }

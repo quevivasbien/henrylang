@@ -1,66 +1,68 @@
-use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}, rc::Rc};
-use downcast_rs::{impl_downcast, DowncastSync};
+use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}};
+// use rc::Rc;
+// use downcast_rs::{impl_downcast, DowncastSync};
 
-#[derive(Debug, PartialEq)]
-pub enum ObjectType {
-    String
-}
+// #[derive(Debug, PartialEq)]
+// pub enum ObjectType {
+//     String
+// }
 
-pub trait Object: DowncastSync {
-    fn get_type(&self) -> ObjectType;
-    fn string(&self) -> String {
-        format!("{:?}", self.get_type())
-    }
-}
-impl_downcast!(sync Object);
+// pub trait Object: DowncastSync {
+//     fn get_type(&self) -> ObjectType;
+//     fn string(&self) -> String {
+//         format!("{:?}", self.get_type())
+//     }
+// }
+// impl_downcast!(sync Object);
 
-impl Debug for dyn Object {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.string())
-    }
-}
+// impl Debug for dyn Object {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.string())
+//     }
+// }
 
-pub struct ObjectString {
-    pub value: String
-}
+// pub struct ObjectString {
+//     pub value: String
+// }
 
-impl Object for ObjectString {
-    fn get_type(&self) -> ObjectType {
-        ObjectType::String
-    }
-    fn string(&self) -> String {
-        self.value.clone()
-    }
-}
+// impl Object for ObjectString {
+//     fn get_type(&self) -> ObjectType {
+//         ObjectType::String
+//     }
+//     fn string(&self) -> String {
+//         self.value.clone()
+//     }
+// }
 
-impl ObjectString {
-    pub fn new(value: String) -> Self {
-        Self { value }
-    }
-}
+// impl ObjectString {
+//     pub fn new(value: String) -> Self {
+//         Self { value }
+//     }
+// }
 
-fn add_objects(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-    match (x.get_type(), y.get_type()) {
-        (ObjectType::String, ObjectType::String) => Ok(Value::Object(
-            Rc::new(ObjectString { value: format!("{}{}", x.string(), y.string()) })
-        )),
-        _ => Err("Add not implemented for this object type"),
-    }
-}
+// fn add_objects(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
+//     match (x.get_type(), y.get_type()) {
+//         (ObjectType::String, ObjectType::String) => Ok(Value::Object(
+//             Rc::new(ObjectString { value: format!("{}{}", x.string(), y.string()) })
+//         )),
+//         _ => Err("Add not implemented for this object type"),
+//     }
+// }
 
-fn objects_eq(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-    match (x.get_type(), y.get_type()) {
-        (ObjectType::String, ObjectType::String) => Ok(Value::Bool(x.string() == y.string())),
-        _ => Err("Equality comparison not implemented for this object type"),
-    }
-}
+// fn objects_eq(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
+//     match (x.get_type(), y.get_type()) {
+//         (ObjectType::String, ObjectType::String) => Ok(Value::Bool(x.string() == y.string())),
+//         _ => Err("Equality comparison not implemented for this object type"),
+//     }
+// }
 
 #[derive(Clone, Debug)]
 pub enum Value {
     Float(f64),
     Int(i64),
     Bool(bool),
-    Object(Rc<dyn Object>),
+    String(String),
+    // Object(Rc<dyn Object>),
 }
 
 impl Display for Value {
@@ -69,7 +71,8 @@ impl Display for Value {
             Value::Float(x) => write!(f, "{}", x),
             Value::Int(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
-            Value::Object(x) => write!(f, "{}", x.string()),
+            Value::String(x) => write!(f, "{}", x),
+            // Value::Object(x) => write!(f, "{}", x.string()),
         }
     }
 }
@@ -81,7 +84,8 @@ impl Add<Value> for Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot add booleans"),
-            (Value::Object(x), Value::Object(y)) => add_objects(x.as_ref(), y.as_ref()),
+            (Value::String(x), Value::String(y)) => Ok(Value::String(format!("{}{}", x, y))),
+            // (Value::Object(x), Value::Object(y)) => add_objects(x.as_ref(), y.as_ref()),
             _ => Err("Cannot add values of different types"),
         }
     }
@@ -94,6 +98,7 @@ impl Sub<Value> for Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x - y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot subtract booleans"),
+            (Value::String(_x), Value::String(_y)) => Err("Cannot subtract strings"),
             _ => Err("Cannot subtract values of different types"),
         }
     }
@@ -106,6 +111,7 @@ impl Mul<Value> for Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x * y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot multiply booleans"),
+            (Value::String(_x), Value::String(_y)) => Err("Cannot multiply strings"),
             _ => Err("Cannot multiply values of different types"),
         }
     }
@@ -118,6 +124,7 @@ impl Div<Value> for Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x / y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x / y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot divide booleans"),
+            (Value::String(_x), Value::String(_y)) => Err("Cannot divide strings"),
             _ => Err("Cannot divide values of different types"),
         }
     }
@@ -170,7 +177,8 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x == y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x == y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x == y)),
-            (Value::Object(x), Value::Object(y)) => objects_eq(x.as_ref(), y.as_ref()),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x == y)),
+            // (Value::Object(x), Value::Object(y)) => objects_eq(x.as_ref(), y.as_ref()),
             _ => Err("Cannot compare values of different types"),
         }
     }
@@ -180,6 +188,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x != y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x != y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x != y)),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x != y)),
             (x, y) => x.eq(y).map(|b| match b {
                 Value::Bool(b) => Value::Bool(!b),
                 _ => unreachable!()
@@ -192,6 +201,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x < y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x < y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Order of booleans is not defined"),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x < y)),
             _ => Err("Cannot compare values of different types"),
         }
     }
@@ -201,6 +211,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x <= y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x <= y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Order of booleans is not defined"),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x <= y)),
             _ => Err("Cannot compare values of different types"),
         }
     }
@@ -210,6 +221,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x > y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x > y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Order of booleans is not defined"),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x > y)),
             _ => Err("Cannot compare values of different types"),
         }
     }
@@ -219,6 +231,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x >= y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x >= y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Order of booleans is not defined"),
+            (Value::String(x), Value::String(y)) => Ok(Value::Bool(x >= y)),
             _ => Err("Cannot compare values of different types"),
         }
     }
