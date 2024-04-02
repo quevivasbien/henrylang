@@ -32,8 +32,8 @@ impl Precedence {
 }
 
 struct ParseRule {
-    prefix: Option<fn(&mut Parser)>,
-    infix: Option<fn(&mut Parser)>,
+    prefix: Option<fn(&mut Compiler)>,
+    infix: Option<fn(&mut Compiler)>,
     precedence: Precedence,
 }
 
@@ -48,7 +48,7 @@ impl Default for ParseRule {
 }
 
 impl ParseRule {
-    fn new(prefix: Option<fn(&mut Parser)>, infix: Option<fn(&mut Parser)>, precedence: Precedence) -> Self {
+    fn new(prefix: Option<fn(&mut Compiler)>, infix: Option<fn(&mut Compiler)>, precedence: Precedence) -> Self {
         Self {
             prefix,
             infix,
@@ -62,75 +62,87 @@ lazy_static! {
         let mut map = HashMap::new();
         map.insert(
             TokenType::LParen,
-            ParseRule::new(Some(Parser::grouping), None, Precedence::None),
+            ParseRule::new(Some(Compiler::grouping), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::LBrace,
+            ParseRule::new(Some(Compiler::block), None, Precedence::None),
         );
         map.insert(
             TokenType::Eq,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Equality),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Equality),
         );
         map.insert(
             TokenType::NEq,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Equality),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Equality),
         );
         map.insert(
             TokenType::GT,  
-            ParseRule::new(None, Some(Parser::binary), Precedence::Comparison),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Comparison),
         );
         map.insert(
             TokenType::GEq,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Comparison),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Comparison),
         );
         map.insert(
             TokenType::LT,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Comparison),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Comparison),
         );
         map.insert(
             TokenType::LEq,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Comparison),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Comparison),
         );
         map.insert(
             TokenType::Minus,
-            ParseRule::new(Some(Parser::unary), Some(Parser::binary), Precedence::Term),
+            ParseRule::new(Some(Compiler::unary), Some(Compiler::binary), Precedence::Term),
         );
         map.insert(
             TokenType::Plus,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Term),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Term),
         );
         map.insert(
             TokenType::Slash,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Factor),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Factor),
         );
         map.insert(
             TokenType::Star,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Factor),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Factor),
         );
         map.insert(
             TokenType::Bang,
-            ParseRule::new(Some(Parser::unary), None, Precedence::None),
+            ParseRule::new(Some(Compiler::unary), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::And,
+            ParseRule::new(None, Some(Compiler::binary), Precedence::And),
+        );
+        map.insert(
+            TokenType::Or,
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Or),
         );
         map.insert(
             TokenType::Int,
-            ParseRule::new(Some(Parser::number), None, Precedence::None),
+            ParseRule::new(Some(Compiler::number), None, Precedence::None),
         );
         map.insert(
             TokenType::Float,
-            ParseRule::new(Some(Parser::number), None, Precedence::None),
+            ParseRule::new(Some(Compiler::number), None, Precedence::None),
         );
         map.insert(
             TokenType::Str,
-            ParseRule::new(Some(Parser::string), None, Precedence::None),
+            ParseRule::new(Some(Compiler::string), None, Precedence::None),
         );
         map.insert(
             TokenType::True,
-            ParseRule::new(Some(Parser::literal), None, Precedence::None),
+            ParseRule::new(Some(Compiler::literal), None, Precedence::None),
         );
         map.insert(
             TokenType::False,
-            ParseRule::new(Some(Parser::literal), None, Precedence::None),
+            ParseRule::new(Some(Compiler::literal), None, Precedence::None),
         );
         map.insert(
             TokenType::Ident,
-            ParseRule::new(Some(Parser::variable), None, Precedence::None),
+            ParseRule::new(Some(Compiler::variable), None, Precedence::None),
         );
 
         // define default rules
@@ -144,20 +156,60 @@ lazy_static! {
     };
 }
 
-struct Parser {
+struct Local {
+    name: String,
+    depth: i32,
+}
+
+struct LocalData {
+    locals: Vec<Local>,
+    scope_depth: i32,
+}
+
+impl Default for LocalData {
+    fn default() -> Self {
+        Self {
+            locals: Vec::new(),
+            scope_depth: 0,
+        }
+    }
+}
+
+impl LocalData {
+    fn push(&mut self, local: Local) -> Result<(), &'static str> {
+        self.locals.push(local);
+        if self.locals.len() == u16::MAX as usize {
+            return Err("Too many locals declared in current program");
+        }
+        Ok(())
+    }
+
+    fn get_idx(&self, name: &str) -> Option<u16> {
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if local.name == name {
+                return Some(i as u16);
+            }
+        }
+        None
+    }
+}
+
+struct Compiler {
     tokens: Vec<Token>,
     chunk: Chunk,
+    locals: LocalData,
     current: usize,
     previous: usize,
     had_error: bool,
     panic_mode: bool,
 }
 
-impl Parser {
+impl Compiler {
     fn new(tokens: Vec<Token>, name: String) -> Self {
         Self {
             tokens,
             chunk: Chunk::new(name),
+            locals: LocalData::default(),
             current: 0,
             previous: 0,
             had_error: false,
@@ -193,6 +245,13 @@ impl Parser {
         eprintln!(": {}", message);
         self.had_error = true;
     }
+    fn match_token(&mut self, ttype: TokenType) -> bool {
+        if self.current_token().ttype == ttype {
+            self.advance();
+            return true;
+        }
+        false
+    }
     fn advance(&mut self) {
         self.previous = self.current;
         loop {
@@ -210,23 +269,44 @@ impl Parser {
         }
         self.error(self.current, Some(message));
     }
-    fn is_declaration(&self) -> bool {
-        if self.current_token().ttype != TokenType::Ident {
-            return false;
+    // fn is_declaration(&self) -> bool {
+    //     if self.current_token().ttype != TokenType::Ident {
+    //         return false;
+    //     }
+    //     let next_token = self.next_token();
+    //     if let Some(next_token) = next_token {
+    //         if next_token.ttype != TokenType::Assign {
+    //             return false;
+    //         }
+    //     }
+    //     else {
+    //         return false;
+    //     }
+    //     true
+    // }
+    fn is_eof(&self) -> bool {
+        self.current_token().ttype == TokenType::EoF
+    }
+
+    fn begin_scope(&mut self) {
+        self.locals.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.locals.scope_depth -= 1;
+        while match self.locals.locals.last() {
+            Some(local) => local.depth > self.locals.scope_depth,
+            None => false,
+        } {
+            self.chunk.write_opcode(OpCode::Pop, self.previous_token().line);
+            self.locals.locals.pop();
         }
-        let next_token = self.next_token();
-        if let Some(next_token) = next_token {
-            if next_token.ttype != TokenType::Assign {
-                return false;
-            }
-        }
-        else {
-            return false;
-        }
-        true
     }
 
     fn parse_precedence(&mut self, precedence: Precedence) {
+        if self.is_eof() {
+            return;
+        }
         self.advance();
         let prefix_rule = match RULES.get(&self.previous_token().ttype).unwrap().prefix {
             Some(rule) => rule,
@@ -234,7 +314,10 @@ impl Parser {
         };
         prefix_rule(self);
 
-        while precedence <= RULES.get(&self.current_token().ttype).unwrap().precedence {
+        while
+            precedence <= RULES.get(&self.current_token().ttype).unwrap().precedence
+            && !self.is_eof()
+        {
             self.advance();
             let infix_rule = match RULES.get(&self.previous_token().ttype).unwrap().infix {
                 Some(rule) => rule,
@@ -244,37 +327,62 @@ impl Parser {
         }
     }
 
-    fn create_variable(&mut self, message: &str) -> Result<u16, &'static str> {
-        self.consume(TokenType::Ident, message);
-        let name = &self.previous_token().text;
-        self.chunk.create_define(name.clone())
+    fn create_local_variable(&mut self, name: String) {
+        // if self.locals.scope_depth == 0 {
+        //     return;
+        // }
+        let local = Local {
+            name,
+            depth: self.locals.scope_depth,
+        };
+        if let Err(e) = self.locals.push(local) {
+            self.error(self.previous, Some(e));
+        }
     }
 
-    fn define_global(&mut self, idx: u16) {
+    // write a define opcode that refers to a previously created name constant
+    fn define_global_variable(&mut self, idx: u16) {
+        if self.locals.scope_depth > 0 {
+            return;
+        }
         if let Err(e) = self.chunk.write_define(idx, self.previous_token().line) {
             self.error(self.previous, Some(e));
         }
     }
 
-    fn var_declaration(&mut self) -> bool {
-        match self.create_variable("Expected variable name") {
+    // then create a constant in the chunk to store the name
+    fn create_variable(&mut self, name: String) -> Result<u16, &'static str> {
+        if self.locals.scope_depth > 0 {
+            self.create_local_variable(name);
+            return Ok(0);
+        }
+        self.chunk.create_define(name)
+    }
+
+    fn var_declaration(&mut self, name: String) {
+        match self.create_variable(name) {
             Ok(idx) => {
                 self.consume(TokenType::Assign, "Expected ':=' after variable name.");
-                self.expression();
-                self.define_global(idx);
+                self.parse_precedence(Precedence::Assignment);
+                self.define_global_variable(idx);
             },
             Err(e) => self.error(self.current + 1, Some(e)),
         };
-        true
     }
 
     fn expression(&mut self) {
-        if self.is_declaration() {
-            self.var_declaration();
+        self.parse_precedence(Precedence::None.next());
+        self.chunk.write_opcode(OpCode::EndExpr, self.previous_token().line);
+    }
+
+    fn block(&mut self) {
+        self.begin_scope();
+        while self.current_token().ttype != TokenType::RBrace && !self.is_eof() {
+            self.expression();
         }
-        else {
-            self.parse_precedence(Precedence::Assignment);
-        }
+
+        self.consume(TokenType::RBrace, "Expected '}' after block.");
+        self.end_scope();
     }
 
     fn number(&mut self) {
@@ -298,13 +406,23 @@ impl Parser {
         }
     }
     fn variable(&mut self) {
-        let name = &self.previous_token().text;
-        if let Err(e) = self.chunk.write_get(name.clone(), self.previous_token().line) {
+        let name = self.previous_token().text.clone();
+        // check whether this is an assignment
+        if self.current_token().ttype == TokenType::Assign {
+            self.var_declaration(name.clone());
+            return;
+        }
+        // proceed with the assumption that the variable has already been defined
+        let res = match self.locals.get_idx(&name) {
+            Some(idx) => self.chunk.write_get_local(idx, self.previous_token().line),
+            None => self.chunk.write_get_global(name.clone(), self.previous_token().line),
+        };
+        if let Err(e) = res {
             self.error(self.previous, Some(e));
         }
     }
     fn grouping(&mut self) {
-        self.expression();
+        self.parse_precedence(Precedence::None.next());
         self.consume(TokenType::RParen, "Expected ')' after expression.");
     }
     fn unary(&mut self) {
@@ -335,6 +453,8 @@ impl Parser {
                 TokenType::Minus => OpCode::Subtract,
                 TokenType::Star => OpCode::Multiply,
                 TokenType::Slash => OpCode::Divide,
+                TokenType::And => OpCode::And,
+                TokenType::Or => OpCode::Or,
                 _ => unreachable!(),
             },
             self.previous_token().line
@@ -349,7 +469,7 @@ impl Parser {
     }
 
     fn parse(&mut self) {
-        while self.current_token().ttype != TokenType::EoF {
+        while !self.is_eof() {
             self.expression();
         }
         self.chunk.write_opcode(OpCode::Return, 1);
@@ -358,13 +478,13 @@ impl Parser {
 
 pub fn compile(source: String, name: String) -> Result<Chunk, ()> {
     let tokens = scan(source);
-    let mut parser = Parser::new(tokens, name);
-    parser.parse();
+    let mut compiler = Compiler::new(tokens, name);
+    compiler.parse();
 
-    if parser.had_error {
+    if compiler.had_error {
         Err(())
     }
     else {
-        Ok(parser.chunk)
+        Ok(compiler.chunk)
     }
 }

@@ -25,14 +25,20 @@ pub enum OpCode {
     Subtract,
     Multiply,
     Divide,
+    And,
+    Or,
     
     // Unary operations
     Negate,
     Not,
+
+    EndExpr,
     
     Constant,
     DefineGlobal,
     GetGlobal,
+    Pop,
+    GetLocal,
 }
 
 impl From<u8> for OpCode {
@@ -68,6 +74,8 @@ impl Chunk {
     }
 
     pub fn write_opcode(&mut self, opcode: OpCode, line: usize) {
+        #[cfg(feature = "debug")]
+        println!("Writing opcode: {:?}", &opcode);
         self.bytes.write_u8(opcode as u8).unwrap();
         self.sync_line(line);
     }
@@ -95,15 +103,23 @@ impl Chunk {
         self.write_opcode(OpCode::DefineGlobal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of variable name to bytes")
     }
-    pub fn write_get(&mut self, name: String, line: usize) -> Result<(), &'static str> {
+    pub fn write_get_global(&mut self, name: String, line: usize) -> Result<(), &'static str> {
         let name = Value::Object(Rc::new(ObjectString::new(name)));
         let idx = self.create_constant(name)?;
         self.write_opcode(OpCode::GetGlobal, line);
-        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of variable name to bytes")
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable name to bytes")
     }
 
+    pub fn write_get_local(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::GetLocal, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of local variable to bytes")
+    }
+
+    pub fn read_u16(&self, cursor: &mut Cursor<&[u8]>) -> u16 {
+        cursor.read_u16::<BigEndian>().unwrap()
+    }
     pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> &Value {
-        let index = cursor.read_u16::<BigEndian>().unwrap();
+        let index = self.read_u16(cursor);
         &self.constants[index as usize]
     }
 
@@ -169,11 +185,20 @@ impl Chunk {
                 OpCode::Divide => {
                     println!("{:04} DIVIDE", pos);
                 },
+                OpCode::And => {
+                    println!("{:04} AND", pos);
+                },
+                OpCode::Or => {
+                    println!("{:04} OR", pos);
+                },
                 OpCode::Negate => {
                     println!("{:04} NEGATE", pos);
                 },
                 OpCode::Not => {
                     println!("{:04} NOT", pos);
+                },
+                OpCode::EndExpr => {
+                    println!("{:04} ENDEXPR", pos);
                 },
                 OpCode::Constant => {
                     let constant = self.read_constant(cursor);
@@ -186,7 +211,13 @@ impl Chunk {
                 OpCode::GetGlobal => {
                     let constant = self.read_constant(cursor);
                     println!("{:04} GETGLOBAL {:?}", pos, constant);
-                }
+                },
+                OpCode::Pop => {
+                    println!("{:04} POP", pos);
+                },
+                OpCode::GetLocal => {
+                    println!("{:04} GETLOCAL", pos);
+                },
             }
             return false
     }

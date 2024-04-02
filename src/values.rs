@@ -1,4 +1,4 @@
-use std::{fmt::{Debug, Display}, ops::{Add, Div, Mul, Neg, Not, Sub}, rc::Rc};
+use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}, rc::Rc};
 use downcast_rs::{impl_downcast, DowncastSync};
 
 #[derive(Debug, PartialEq)]
@@ -45,6 +45,13 @@ fn add_objects(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
             Rc::new(ObjectString { value: format!("{}{}", x.string(), y.string()) })
         )),
         _ => Err("Add not implemented for this object type"),
+    }
+}
+
+fn objects_eq(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
+    match (x.get_type(), y.get_type()) {
+        (ObjectType::String, ObjectType::String) => Ok(Value::Bool(x.string() == y.string())),
+        _ => Err("Equality comparison not implemented for this object type"),
     }
 }
 
@@ -116,6 +123,26 @@ impl Div<Value> for Value {
     }
 }
 
+impl BitAnd<Value> for Value {
+    type Output = Result<Value, &'static str>;
+    fn bitand(self, rhs: Value) -> Self::Output {
+        match (self, rhs) {
+            (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x && y)),
+            _ => Err("Cannot use `and` operator on non-boolean values"),
+        }
+    }
+}
+
+impl BitOr<Value> for Value {
+    type Output = Result<Value, &'static str>;
+    fn bitor(self, rhs: Value) -> Self::Output {
+        match (self, rhs) {
+            (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x || y)),
+            _ => Err("Cannot use `or` operator on non-boolean values"),
+        }
+    }
+}
+
 impl Neg for Value {
     type Output = Result<Value, &'static str>;
     fn neg(self) -> Self::Output {
@@ -143,6 +170,7 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x == y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x == y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x == y)),
+            (Value::Object(x), Value::Object(y)) => objects_eq(x.as_ref(), y.as_ref()),
             _ => Err("Cannot compare values of different types"),
         }
     }
@@ -152,7 +180,10 @@ impl Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x != y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Bool(x != y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x != y)),
-            _ => Err("Cannot compare values of different types"),
+            (x, y) => x.eq(y).map(|b| match b {
+                Value::Bool(b) => Value::Bool(!b),
+                _ => unreachable!()
+            }),
         }
     }
 

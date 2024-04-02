@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::{Add, Div, Mul, Neg, Not, Sub}};
+use std::{collections::HashMap, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}};
 
 use byteorder::ReadBytesExt;
 
@@ -13,11 +13,12 @@ pub enum InterpreterError {
 pub struct VM {
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
+    last_value: Option<Value>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::new(), globals: HashMap::new() }
+        Self { stack: Vec::new(), globals: HashMap::new(), last_value: None }
     }
 
     fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
@@ -56,7 +57,7 @@ impl VM {
             };
             match opcode {
                 OpCode::Return => {
-                    return Ok(self.stack.pop());
+                    return Ok(self.last_value.clone());
                 },
                 OpCode::True => self.stack.push(Value::Bool(true)),
                 OpCode::False => self.stack.push(Value::Bool(false)),
@@ -70,8 +71,14 @@ impl VM {
                 OpCode::Subtract => self.binary_op(Value::sub)?,
                 OpCode::Multiply => self.binary_op(Value::mul)?,
                 OpCode::Divide => self.binary_op(Value::div)?,
+                OpCode::And => self.binary_op(Value::bitand)?,
+                OpCode::Or => self.binary_op(Value::bitor)?,
                 OpCode::Negate => self.unary_op(Value::neg)?,
                 OpCode::Not => self.unary_op(Value::not)?,
+                OpCode::EndExpr => {
+                    self.last_value = self.stack.pop();
+                    // self.last_value = self.stack.last().cloned();
+                }
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut cursor);
                     self.stack.push(constant.clone());
@@ -100,6 +107,14 @@ impl VM {
                         Some(x) => self.stack.push(x.clone()),
                         None => return Err(InterpreterError::RuntimeError("Attempted to access undefined global variable")),
                     }
+                },
+                OpCode::Pop => {
+                    self.stack.pop();
+                },
+                OpCode::GetLocal => {
+                    let idx = chunk.read_u16(&mut cursor);
+                    let value = self.stack[idx as usize].clone();
+                    self.stack.push(value);
                 }
             }
         }
