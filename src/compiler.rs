@@ -144,6 +144,10 @@ lazy_static! {
             TokenType::Ident,
             ParseRule::new(Some(Compiler::variable), None, Precedence::None),
         );
+        map.insert(
+            TokenType::If,
+            ParseRule::new(Some(Compiler::if_expr), None, Precedence::None),
+        );
 
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
@@ -245,13 +249,13 @@ impl Compiler {
         eprintln!(": {}", message);
         self.had_error = true;
     }
-    // fn match_token(&mut self, ttype: TokenType) -> bool {
-    //     if self.current_token().ttype == ttype {
-    //         self.advance();
-    //         return true;
-    //     }
-    //     false
-    // }
+    fn match_token(&mut self, ttype: TokenType) -> bool {
+        if self.current_token().ttype == ttype {
+            self.advance();
+            return true;
+        }
+        false
+    }
     fn advance(&mut self) {
         self.previous = self.current;
         loop {
@@ -381,6 +385,30 @@ impl Compiler {
         self.end_scope();
     }
 
+    fn if_expr(&mut self) {
+        self.expression();
+        let jump_if_idx = match self.chunk.write_jump(OpCode::JumpIfFalse, self.previous_token().line) {
+            Ok(idx) => idx,
+            Err(e) => return self.error(self.previous, Some(e)),
+        };
+        self.consume(TokenType::LBrace, "Expected '{' after 'if'.");
+        self.block();  // expr evaluated if condition is true
+        let jump_else_idx = match self.chunk.write_jump(OpCode::Jump, self.previous_token().line) {
+            Ok(idx) => idx,
+            Err(e) => return self.error(self.previous, Some(e)),
+        };
+        if let Err(e) = self.chunk.patch_jump(jump_if_idx) {
+            self.error(self.previous, Some(e));
+        };
+        if self.match_token(TokenType::Else) {
+            self.consume(TokenType::LBrace, "Expected '{' after 'else'.");
+            self.block();
+        }
+        if let Err(e) = self.chunk.patch_jump(jump_else_idx) {
+            self.error(self.previous, Some(e));
+        }
+    }
+
     fn number(&mut self) {
         let token = self.previous_token();
         let value = match token.ttype {
@@ -474,6 +502,9 @@ pub fn compile(source: String, name: String) -> Result<Chunk, ()> {
     let tokens = scan(source);
     let mut compiler = Compiler::new(tokens, name);
     compiler.parse();
+
+    #[cfg(feature = "debug")]
+    compiler.chunk.disassemble();
 
     if compiler.had_error {
         Err(())

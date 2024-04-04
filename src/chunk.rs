@@ -33,6 +33,8 @@ pub enum OpCode {
 
     EndExpr,
     EndBlock,
+    Jump,
+    JumpIfFalse,
     
     Constant,
     SetGlobal,
@@ -74,8 +76,6 @@ impl Chunk {
     }
 
     pub fn write_opcode(&mut self, opcode: OpCode, line: usize) {
-        #[cfg(feature = "debug")]
-        println!("Writing opcode: {:?}", &opcode);
         self.bytes.write_u8(opcode as u8).unwrap();
         self.sync_line(line);
     }
@@ -114,6 +114,27 @@ impl Chunk {
         self.write_opcode(OpCode::EndBlock, line);
         self.bytes.write_u16::<BigEndian>(n_pops).map_err(|_| "Failed to write number of pops to bytes")
     }
+    
+    pub fn write_jump(&mut self, opcode: OpCode, line: usize) -> Result<usize, &'static str> {
+        match opcode {
+            OpCode::Jump => (),
+            OpCode::JumpIfFalse => (),
+            _ => return Err("Invalid opcode for write_jump"),
+        };
+        self.write_opcode(opcode, line);
+        self.bytes.write_u16::<BigEndian>(0).map_err(|_| "Failed to write jump offset placeholder to bytes")?;
+        Ok(self.bytes.len()-2)
+    }
+    pub fn patch_jump(&mut self, idx: usize) -> Result<(), &'static str> {
+        let jump = self.bytes.len() - idx - 2;
+        if jump > u16::MAX as usize {
+            return Err("Jump offset overflow");
+        }
+        // manually write the jump size at the offset index
+        self.bytes[idx] = (jump >> 8) as u8;
+        self.bytes[idx + 1] = jump as u8;
+        Ok(())
+    }
 
     pub fn read_u16(cursor: &mut Cursor<&[u8]>) -> u16 {
         cursor.read_u16::<BigEndian>().unwrap()
@@ -139,7 +160,8 @@ impl Chunk {
         line_count
     }
 
-    pub fn _disassemble_instruction(&self, cursor: &mut Cursor<&[u8]>) -> bool {
+    #[cfg(feature = "debug")]
+    pub fn disassemble_instruction(&self, cursor: &mut Cursor<&[u8]>) -> bool {
         let pos = cursor.position();
             let opcode = match cursor.read_u8() {
                 Ok(x) => OpCode::from(x),
@@ -203,6 +225,14 @@ impl Chunk {
                 OpCode::EndBlock => {
                     let n_pops = Self::read_u16(cursor);
                     println!("{:04} ENDBLOCK {}", pos, n_pops);
+                },
+                OpCode::Jump => {
+                    let offset = Self::read_u16(cursor);
+                    println!("{:04} JUMP {}", pos, offset);
+                }
+                OpCode::JumpIfFalse => {
+                    let offset = Self::read_u16(cursor);
+                    println!("{:04} JUMPIFFALSE {}", pos, offset);
                 }
                 OpCode::Constant => {
                     let constant = self.read_constant(cursor);
@@ -227,11 +257,12 @@ impl Chunk {
             return false
     }
 
-    pub fn _disassemble(&self) {
+    #[cfg(feature = "debug")]
+    pub fn disassemble(&self) {
         println!("== {} ==", self.name);
         let mut cursor = self.cursor();
         loop {
-            if self._disassemble_instruction(&mut cursor) {
+            if self.disassemble_instruction(&mut cursor) {
                 break;
             }
         }

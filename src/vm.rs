@@ -46,13 +46,12 @@ impl VM {
 
     pub fn run(&mut self, chunk: &Chunk) -> Result<Option<Value>, InterpreterError> {
         let mut cursor = chunk.cursor();
-        #[cfg(feature = "debug")]
-        let mut cursor_copy = chunk.cursor();
         loop {
             #[cfg(feature = "debug")]
             {
                 println!("{:?}", self);
-                chunk._disassemble_instruction(&mut cursor_copy);
+                let mut cursor_copy = cursor.clone();
+                chunk.disassemble_instruction(&mut cursor_copy);
             }
             let opcode = match cursor.read_u8() {
                 Ok(x) => OpCode::from(x),
@@ -88,6 +87,24 @@ impl VM {
                         Some(x) => x.clone(),
                         None => Value::Bool(false),
                     });
+                },
+                OpCode::Jump => {
+                    let offset = Chunk::read_u16(&mut cursor);
+                    cursor.set_position(cursor.position() + offset as u64);  
+                },
+                OpCode::JumpIfFalse => {
+                    let offset = Chunk::read_u16(&mut cursor);
+                    let condition = match &self.last_value {
+                        Some(x) => x,
+                        None => return Err(InterpreterError::RuntimeError("Attempted to jump with null condition")),
+                    };
+                    match condition {
+                        Value::Bool(false) => {
+                            cursor.set_position(cursor.position() + offset as u64);
+                        },
+                        Value::Bool(true) => (),
+                        _ => return Err(InterpreterError::RuntimeError("Expected boolean in condition")),
+                    }
                 },
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut cursor);
