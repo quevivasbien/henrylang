@@ -400,7 +400,6 @@ impl Compiler {
 
     fn expression(&mut self) {
         self.parse_precedence(Precedence::None.next());
-        self.write_opcode(OpCode::EndExpr);
     }
 
     fn argument_list(&mut self) -> u8 {
@@ -426,6 +425,7 @@ impl Compiler {
         self.begin_scope();
         while self.current_token().ttype != TokenType::RBrace && !self.is_eof() {
             self.expression();
+            self.write_opcode(OpCode::EndExpr);
         }
 
         self.consume(TokenType::RBrace, "Expected '}' after block.");
@@ -480,6 +480,7 @@ impl Compiler {
         }
         compiler.consume(TokenType::LBrace, "Expected '{' before function body");
         compiler.block();
+        compiler.write_opcode(OpCode::Return);
         compiler.end_scope();
 
         self.current = compiler.current;
@@ -584,8 +585,9 @@ impl Compiler {
     fn parse(&mut self) {
         while !self.is_eof() {
             self.expression();
+            self.write_opcode(OpCode::EndExpr);
         }
-        self.chunk().write_opcode(OpCode::Return, 1);
+        self.write_opcode(OpCode::Return);
     }
 }
 
@@ -593,9 +595,6 @@ pub fn compile(source: String) -> Result<Function, ()> {
     let tokens = Rc::new(scan(source));
     let mut compiler = Compiler::new(tokens, 0);
     compiler.parse();
-
-    #[cfg(feature = "debug")]
-    compiler.chunk().disassemble();
 
     if compiler.had_error {
         Err(())

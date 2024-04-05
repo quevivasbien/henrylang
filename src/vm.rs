@@ -14,20 +14,18 @@ pub enum InterpreterError {
 struct CallFrame {
     function: Rc<Function>,
     ip: usize,
-    varstack_idx: usize,
+    stack_idx: usize,
 }
 
 impl CallFrame {
-    fn new(function: Rc<Function>, varstack_idx: usize) -> Self {
-        Self { function, ip: 0, varstack_idx }
+    fn new(function: Rc<Function>, stack_idx: usize) -> Self {
+        Self { function, ip: 0, stack_idx }
     }
 }
 
 #[derive(Debug)]
 pub struct VM {
-    frames: Vec<CallFrame>,
     stack: Vec<Value>,
-    varstack: Vec<Value>,
     globals: HashMap<String, Value>,
     last_value: Option<Value>,
 }
@@ -35,9 +33,7 @@ pub struct VM {
 impl VM {
     pub fn new() -> Self {
         Self {
-            frames: Vec::new(),
             stack: Vec::new(),
-            varstack: Vec::new(),
             globals: HashMap::new(),
             last_value: None
         }
@@ -63,19 +59,23 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self) -> Result<Option<Value>, InterpreterError> {
-        let mut frame = match self.frames.pop() {
-            Some(x) => x,
-            None => return Err(InterpreterError::RuntimeError("Attempted to run null function")),
-        };
+    fn call(&mut self, mut frame: CallFrame) -> Result<Option<Value>, InterpreterError> {
         let chunk = &frame.function.chunk;
+        #[cfg(feature = "debug")]
+        {
+            println!("==call {:?}==", frame.function);
+            chunk.disassemble();
+            println!("");
+        }
         loop {
             if frame.ip >= chunk.len() {
                 return Err(InterpreterError::RuntimeError("Reached end of chunk with no return"));
             }
             #[cfg(feature = "debug")]
             {
-                println!("{:?}", self);
+                print!("stack: {:?}, ", &self.stack[frame.stack_idx..]);
+                print!("globals: {:?}, ", self.globals);
+                println!("last_value: {:?}", self.last_value);
                 let mut ip_copy = frame.ip;
                 chunk.disassemble_instruction(&mut ip_copy);
             }
@@ -107,7 +107,7 @@ impl VM {
                 },
                 OpCode::EndBlock => {
                     let n_pops = chunk.read_u16(&mut frame.ip);
-                    self.varstack.truncate(self.varstack.len() - n_pops as usize);
+                    self.stack.truncate(self.stack.len() - n_pops as usize);
                     self.stack.push(match &self.last_value {
                         Some(x) => x.clone(),
                         None => Value::Bool(false),
@@ -119,7 +119,7 @@ impl VM {
                 },
                 OpCode::JumpIfFalse => {
                     let offset = chunk.read_u16(&mut frame.ip);
-                    let condition = match &self.last_value {
+                    let condition = match self.stack.pop() {
                         Some(x) => x,
                         None => return Err(InterpreterError::RuntimeError("Attempted to jump with null condition")),
                     };
@@ -132,7 +132,20 @@ impl VM {
                     }
                 },
                 OpCode::Call => {
-                    todo!()
+                    let n_args = chunk.read_u8(&mut frame.ip);
+                    let caller = match &self.stack[self.stack.len()-n_args as usize-1] {
+                        Value::Function(f) => f.clone(),
+                        _ => return Err(InterpreterError::RuntimeError("Attempted to call non-function")),
+                    };
+                    
+                    let new_frame = CallFrame::new(caller, self.stack.len() - n_args as usize - 1);
+                    let result = match self.call(new_frame)? {
+                        Some(x) => x,
+                        None => Value::Bool(false),
+                    };
+                    // clear stack used by function and function args
+                    self.stack.truncate(self.stack.len() - n_args as usize - 1);
+                    self.stack.push(result);
                 },
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut frame.ip);
@@ -163,13 +176,13 @@ impl VM {
                 OpCode::SetLocal => {
                     let value = self.stack.last();
                     match value {
-                        Some(x) => self.varstack.push(x.clone()),
+                        Some(x) => self.stack.push(x.clone()),
                         None => return Err(InterpreterError::RuntimeError("Attempted to set null variable")),
                     }
                 },
                 OpCode::GetLocal => {
                     let idx = chunk.read_u16(&mut frame.ip);
-                    let value = self.varstack[frame.varstack_idx + idx as usize].clone();
+                    let value = self.stack[frame.stack_idx + idx as usize].clone();
                     self.stack.push(value);
                 }
             }
@@ -179,9 +192,8 @@ impl VM {
     pub fn interpret(&mut self, source: String) -> Result<Option<Value>, InterpreterError> {
         let function = Rc::new(compile(source).map_err(|_| InterpreterError::CompileError)?);
         self.stack.push(Value::Function(function.clone()));
-        let frame = CallFrame::new(function, self.varstack.len());
-        self.frames.push(frame);
+        let frame = CallFrame::new(function, 0);
 
-        self.run()
+        self.call(frame)
     }
 }
