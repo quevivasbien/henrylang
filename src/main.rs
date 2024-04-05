@@ -11,7 +11,7 @@ use stdio::Write;
 use chunk::{Chunk, OpCode};
 use scanner::scan;
 use token::{TokenType, Token};
-use values::Value;
+use values::{Function, Value};
 use vm::VM;
 
 use compiler::compile;
@@ -27,12 +27,10 @@ fn repl(vm: &mut VM) {
         if user_input == "exit\n" {
             break;
         }
-        if let Ok(chunk) = compile(user_input, "User Input".to_string()) {
-            match vm.run(&chunk) {
-                Ok(Some(x)) => println!("{}", x),
-                Ok(None) => (),
-                Err(e) => println!("{:?}", e),
-            }
+        match vm.interpret(user_input) {
+            Ok(Some(x)) => println!("{}", x),
+            Ok(None) => (),
+            Err(e) => println!("{:?}", e),
         }
     }
 }
@@ -46,12 +44,10 @@ fn run_file(vm: &mut VM, path: &str) {
             return;
         }
     };
-    if let Ok(chunk) = compile(contents, path.to_string()) {
-        match vm.run(&chunk) {
-            Ok(Some(x)) => println!("{}", x),
-            Ok(None) => (),
-            Err(e) => println!("{:?}", e),
-        }
+    match vm.interpret(contents) {
+        Ok(Some(x)) => println!("{}", x),
+        Ok(None) => (),
+        Err(e) => println!("{:?}", e),
     }
 }
 

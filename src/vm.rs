@@ -1,18 +1,31 @@
 use std::collections::HashMap;
 use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
+use std::rc::Rc;
 
-use byteorder::ReadBytesExt;
-
-use crate::{Chunk, OpCode, Value};
+use crate::{Function, OpCode, Value, compile};
 
 #[derive(Debug)]
 pub enum InterpreterError {
-    CompileError(&'static str),
+    CompileError,
     RuntimeError(&'static str),
 }
 
 #[derive(Debug)]
+struct CallFrame {
+    function: Rc<Function>,
+    ip: usize,
+    varstack_idx: usize,
+}
+
+impl CallFrame {
+    fn new(function: Rc<Function>, varstack_idx: usize) -> Self {
+        Self { function, ip: 0, varstack_idx }
+    }
+}
+
+#[derive(Debug)]
 pub struct VM {
+    frames: Vec<CallFrame>,
     stack: Vec<Value>,
     varstack: Vec<Value>,
     globals: HashMap<String, Value>,
@@ -21,7 +34,13 @@ pub struct VM {
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::new(), varstack: Vec::new(), globals: HashMap::new(), last_value: None }
+        Self {
+            frames: Vec::new(),
+            stack: Vec::new(),
+            varstack: Vec::new(),
+            globals: HashMap::new(),
+            last_value: None
+        }
     }
 
     fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
@@ -44,21 +63,27 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self, chunk: &Chunk) -> Result<Option<Value>, InterpreterError> {
-        let mut cursor = chunk.cursor();
+    pub fn run(&mut self) -> Result<Option<Value>, InterpreterError> {
+        let mut frame = match self.frames.pop() {
+            Some(x) => x,
+            None => return Err(InterpreterError::RuntimeError("Attempted to run null function")),
+        };
+        let chunk = &frame.function.chunk;
         loop {
+            if frame.ip >= chunk.len() {
+                return Err(InterpreterError::RuntimeError("Reached end of chunk with no return"));
+            }
             #[cfg(feature = "debug")]
             {
                 println!("{:?}", self);
-                let mut cursor_copy = cursor.clone();
-                chunk.disassemble_instruction(&mut cursor_copy);
+                let mut ip_copy = frame.ip;
+                chunk.disassemble_instruction(&mut ip_copy);
             }
-            let opcode = match cursor.read_u8() {
-                Ok(x) => OpCode::from(x),
-                Err(_) => return Err(InterpreterError::CompileError("Reached end of chunk with no return")),
-            };
+            let opcode = OpCode::from(chunk.read_u8(&mut frame.ip));
             match opcode {
                 OpCode::Return => {
+                    // pop function
+                    self.stack.pop();
                     return Ok(self.last_value.clone());
                 },
                 OpCode::True => self.stack.push(Value::Bool(true)),
@@ -81,7 +106,7 @@ impl VM {
                     self.last_value = self.stack.pop();
                 },
                 OpCode::EndBlock => {
-                    let n_pops = Chunk::read_u16(&mut cursor);
+                    let n_pops = chunk.read_u16(&mut frame.ip);
                     self.varstack.truncate(self.varstack.len() - n_pops as usize);
                     self.stack.push(match &self.last_value {
                         Some(x) => x.clone(),
@@ -89,29 +114,32 @@ impl VM {
                     });
                 },
                 OpCode::Jump => {
-                    let offset = Chunk::read_u16(&mut cursor);
-                    cursor.set_position(cursor.position() + offset as u64);  
+                    let offset = chunk.read_u16(&mut frame.ip);
+                    frame.ip += offset as usize;
                 },
                 OpCode::JumpIfFalse => {
-                    let offset = Chunk::read_u16(&mut cursor);
+                    let offset = chunk.read_u16(&mut frame.ip);
                     let condition = match &self.last_value {
                         Some(x) => x,
                         None => return Err(InterpreterError::RuntimeError("Attempted to jump with null condition")),
                     };
                     match condition {
                         Value::Bool(false) => {
-                            cursor.set_position(cursor.position() + offset as u64);
+                            frame.ip += offset as usize;
                         },
                         Value::Bool(true) => (),
                         _ => return Err(InterpreterError::RuntimeError("Expected boolean in condition")),
                     }
                 },
+                OpCode::Call => {
+                    todo!()
+                },
                 OpCode::Constant => {
-                    let constant = chunk.read_constant(&mut cursor);
+                    let constant = chunk.read_constant(&mut frame.ip);
                     self.stack.push(constant.clone());
                 },
                 OpCode::SetGlobal => {
-                    let name = chunk.read_constant(&mut cursor);
+                    let name = chunk.read_constant(&mut frame.ip);
                     let name = match name.clone() {
                         Value::String(name) => name,
                         _ => unreachable!("Global name was not a string"),
@@ -123,7 +151,7 @@ impl VM {
                     self.globals.insert(name, value);
                 },
                 OpCode::GetGlobal => {
-                    let name = match &chunk.read_constant(&mut cursor) {
+                    let name = match &chunk.read_constant(&mut frame.ip) {
                         Value::String(name) => name,
                         _ => unreachable!("Global name was not a string"),
                     };
@@ -140,11 +168,20 @@ impl VM {
                     }
                 },
                 OpCode::GetLocal => {
-                    let idx = Chunk::read_u16(&mut cursor);
-                    let value = self.varstack[idx as usize].clone();
+                    let idx = chunk.read_u16(&mut frame.ip);
+                    let value = self.varstack[frame.varstack_idx + idx as usize].clone();
                     self.stack.push(value);
                 }
             }
         }
+    }
+
+    pub fn interpret(&mut self, source: String) -> Result<Option<Value>, InterpreterError> {
+        let function = Rc::new(compile(source).map_err(|_| InterpreterError::CompileError)?);
+        self.stack.push(Value::Function(function.clone()));
+        let frame = CallFrame::new(function, self.varstack.len());
+        self.frames.push(frame);
+
+        self.run()
     }
 }

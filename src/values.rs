@@ -1,6 +1,8 @@
 use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub}};
-// use rc::Rc;
+use std::rc::Rc;
 // use downcast_rs::{impl_downcast, DowncastSync};
+
+use crate::Chunk;
 
 // #[derive(Debug, PartialEq)]
 // pub enum ObjectType {
@@ -56,12 +58,30 @@ use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, S
 //     }
 // }
 
+pub struct Function {
+    pub arity: u8,
+    pub chunk: Chunk,
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]{{{}}}", self.arity, self.chunk.len())
+    }
+}
+
+impl Default for Function {
+    fn default() -> Self {
+        Self { arity: 0, chunk: Chunk::new() }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Value {
     Float(f64),
     Int(i64),
     Bool(bool),
     String(String),
+    Function(Rc<Function>),
     // Object(Rc<dyn Object>),
 }
 
@@ -72,6 +92,7 @@ impl Display for Value {
             Value::Int(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::String(x) => write!(f, "{}", x),
+            Value::Function(x) => write!(f, "{:?}", x),
             // Value::Object(x) => write!(f, "{}", x.string()),
         }
     }

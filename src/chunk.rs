@@ -1,5 +1,4 @@
-use stdio::Cursor;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use crate::Value;
 
@@ -35,6 +34,7 @@ pub enum OpCode {
     EndBlock,
     Jump,
     JumpIfFalse,
+    Call,
     
     Constant,
     SetGlobal,
@@ -50,20 +50,22 @@ impl From<u8> for OpCode {
 }
 
 pub struct Chunk {
-    pub name: String,
     bytes: Vec<u8>,
     constants: Vec<Value>,
     newlines: Vec<usize>,
 }
 
 impl Chunk {
-    pub fn new(name: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            name,
             bytes: Vec::new(),
             constants: Vec::new(),
             newlines: Vec::new(),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
     }
 
     fn sync_line(&mut self, line: usize) {
@@ -136,16 +138,24 @@ impl Chunk {
         Ok(())
     }
 
-    pub fn read_u16(cursor: &mut Cursor<&[u8]>) -> u16 {
-        cursor.read_u16::<BigEndian>().unwrap()
-    }
-    pub fn read_constant(&self, cursor: &mut Cursor<&[u8]>) -> &Value {
-        let index = Self::read_u16(cursor);
-        &self.constants[index as usize]
+    pub fn write_call(&mut self, arg_count: u8, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::Call, line);
+        self.bytes.write_u8(arg_count).map_err(|_| "Failed to write number of arguments to bytes")
     }
 
-    pub fn cursor(&self) -> Cursor<&[u8]> {
-        Cursor::new(&self.bytes.as_slice())
+    pub fn read_u8(&self, ip: &mut usize) -> u8 {
+        let out = self.bytes[*ip];
+        *ip += 1;
+        out
+    }
+    pub fn read_u16(&self, ip: &mut usize) -> u16 {
+        let out = BigEndian::read_u16(&self.bytes[*ip..*ip + 2]);
+        *ip += 2;
+        out
+    }
+    pub fn read_constant(&self, ip: &mut usize) -> &Value {
+        let index = self.read_u16(ip);
+        &self.constants[index as usize]
     }
 
     // figures out line number for a given byte index
@@ -161,108 +171,111 @@ impl Chunk {
     }
 
     #[cfg(feature = "debug")]
-    pub fn disassemble_instruction(&self, cursor: &mut Cursor<&[u8]>) -> bool {
-        let pos = cursor.position();
-            let opcode = match cursor.read_u8() {
-                Ok(x) => OpCode::from(x),
-                Err(_) => return true,
-            };
-            match opcode {
-                OpCode::Return => {
-                    println!("{:04} RETURN", pos);
-                },
-                OpCode::True => {
-                    println!("{:04} TRUE", pos);
-                },
-                OpCode::False => {
-                    println!("{:04} FALSE", pos);
-                },
-                OpCode::Equal => {
-                    println!("{:04} EQUAL", pos);
-                },
-                OpCode::NotEqual => {
-                    println!("{:04} NOTEQUAL", pos);
-                },
-                OpCode::Greater => {
-                    println!("{:04} GREATER", pos);
-                },
-                OpCode::GreaterEqual => {
-                    println!("{:04} GREATEREQUAL", pos);
-                },
-                OpCode::Less => {
-                    println!("{:04} LESS", pos);
-                },
-                OpCode::LessEqual => {
-                    println!("{:04} LESSEQUAL", pos);
-                },
-                OpCode::Add => {
-                    println!("{:04} ADD", pos);
-                },
-                OpCode::Subtract => {
-                    println!("{:04} SUBTRACT", pos);
-                },
-                OpCode::Multiply => {
-                    println!("{:04} MULTIPLY", pos);
-                },
-                OpCode::Divide => {
-                    println!("{:04} DIVIDE", pos);
-                },
-                OpCode::And => {
-                    println!("{:04} AND", pos);
-                },
-                OpCode::Or => {
-                    println!("{:04} OR", pos);
-                },
-                OpCode::Negate => {
-                    println!("{:04} NEGATE", pos);
-                },
-                OpCode::Not => {
-                    println!("{:04} NOT", pos);
-                },
-                OpCode::EndExpr => {
-                    println!("{:04} ENDEXPR", pos);
-                },
-                OpCode::EndBlock => {
-                    let n_pops = Self::read_u16(cursor);
-                    println!("{:04} ENDBLOCK {}", pos, n_pops);
-                },
-                OpCode::Jump => {
-                    let offset = Self::read_u16(cursor);
-                    println!("{:04} JUMP {}", pos, offset);
-                }
-                OpCode::JumpIfFalse => {
-                    let offset = Self::read_u16(cursor);
-                    println!("{:04} JUMPIFFALSE {}", pos, offset);
-                }
-                OpCode::Constant => {
-                    let constant = self.read_constant(cursor);
-                    println!("{:04} CONSTANT {:?}", pos, constant);
-                },
-                OpCode::SetGlobal => {
-                    let name = self.read_constant(cursor);
-                    println!("{:04} SETGLOBAL {:?}", pos, name);
-                },
-                OpCode::GetGlobal => {
-                    let name = self.read_constant(cursor);
-                    println!("{:04} GETGLOBAL {:?}", pos, name);
-                },
-                OpCode::SetLocal => {
-                    println!("{:04} SETLOCAL", pos);
-                },
-                OpCode::GetLocal => {
-                    let idx = Self::read_u16(cursor);
-                    println!("{:04} GETLOCAL {}", pos, idx);
-                },
-            }
-            return false
+    pub fn disassemble_instruction(&self, ip: &mut usize) -> bool {
+        if *ip >= self.bytes.len() {
+            return true;
+        }
+        let ip0 = *ip;
+        let opcode = OpCode::from(self.read_u8(ip));
+        match opcode {
+            OpCode::Return => {
+                println!("{:04} RETURN", ip0);
+            },
+            OpCode::True => {
+                println!("{:04} TRUE", ip0);
+            },
+            OpCode::False => {
+                println!("{:04} FALSE", ip0);
+            },
+            OpCode::Equal => {
+                println!("{:04} EQUAL", ip0);
+            },
+            OpCode::NotEqual => {
+                println!("{:04} NOTEQUAL", ip0);
+            },
+            OpCode::Greater => {
+                println!("{:04} GREATER", ip0);
+            },
+            OpCode::GreaterEqual => {
+                println!("{:04} GREATEREQUAL", ip0);
+            },
+            OpCode::Less => {
+                println!("{:04} LESS", ip0);
+            },
+            OpCode::LessEqual => {
+                println!("{:04} LESSEQUAL", ip0);
+            },
+            OpCode::Add => {
+                println!("{:04} ADD", ip0);
+            },
+            OpCode::Subtract => {
+                println!("{:04} SUBTRACT", ip0);
+            },
+            OpCode::Multiply => {
+                println!("{:04} MULTIPLY", ip0);
+            },
+            OpCode::Divide => {
+                println!("{:04} DIVIDE", ip0);
+            },
+            OpCode::And => {
+                println!("{:04} AND", ip0);
+            },
+            OpCode::Or => {
+                println!("{:04} OR", ip0);
+            },
+            OpCode::Negate => {
+                println!("{:04} NEGATE", ip0);
+            },
+            OpCode::Not => {
+                println!("{:04} NOT", ip0);
+            },
+            OpCode::EndExpr => {
+                println!("{:04} ENDEXPR", ip0);
+            },
+            OpCode::EndBlock => {
+                let n_pops = self.read_u16(ip);
+                println!("{:04} ENDBLOCK {}", ip0, n_pops);
+            },
+            OpCode::Jump => {
+                let offset = self.read_u16(ip);
+                println!("{:04} JUMP {}", ip0, offset);
+            },
+            OpCode::JumpIfFalse => {
+                let offset = self.read_u16(ip);
+                println!("{:04} JUMPIFFALSE {}", ip0, offset);
+            },
+            OpCode::Call => {
+                let arg_count = self.read_u8(ip);
+                println!("{:04} CALL {}", ip0, arg_count);
+            },
+            OpCode::Constant => {
+                let constant = self.read_constant(ip);
+                println!("{:04} CONSTANT {:?}", ip0, constant);
+            },
+            OpCode::SetGlobal => {
+                let name = self.read_constant(ip);
+                println!("{:04} SETGLOBAL {:?}", ip0, name);
+            },
+            OpCode::GetGlobal => {
+                let name = self.read_constant(ip);
+                println!("{:04} GETGLOBAL {:?}", ip0, name);
+            },
+            OpCode::SetLocal => {
+                println!("{:04} SETLOCAL", ip0);
+            },
+            OpCode::GetLocal => {
+                let idx = self.read_u16(ip);
+                println!("{:04} GETLOCAL {}", ip0, idx);
+            },
+        }
+        return false
     }
 
     #[cfg(feature = "debug")]
     pub fn disassemble(&self) {
-        println!("== {} ==", self.name);
-        let mut cursor = self.cursor();
+        let mut ip = 0;
         loop {
-            if self.disassemble_instruction(&mut cursor) {
+            if self.disassemble_instruction(&mut ip) {
                 break;
             }
         }

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use lazy_static::lazy_static;
 
-use crate::{scan, Chunk, OpCode, Token, TokenType, Value};
+use crate::{scan, Chunk, Function, OpCode, Token, TokenType, Value};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -15,7 +16,7 @@ enum Precedence {
     Term,
     Factor,
     Unary,
-    // Call,
+    Call,
     // Primary,
 }
 
@@ -62,11 +63,15 @@ lazy_static! {
         let mut map = HashMap::new();
         map.insert(
             TokenType::LParen,
-            ParseRule::new(Some(Compiler::grouping), None, Precedence::None),
+            ParseRule::new(Some(Compiler::grouping), Some(Compiler::call), Precedence::Call),
         );
         map.insert(
             TokenType::LBrace,
             ParseRule::new(Some(Compiler::block), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Pipe,
+            ParseRule::new(Some(Compiler::fn_decl), None, Precedence::None),
         );
         map.insert(
             TokenType::Eq,
@@ -173,7 +178,11 @@ struct LocalData {
 impl Default for LocalData {
     fn default() -> Self {
         Self {
-            locals: Vec::new(),
+            locals: {
+                let mut locals = Vec::new();
+                locals.push(Local { name: "".to_string(), depth: 0 });
+                locals
+            },
             scope_depth: 0,
         }
     }
@@ -183,7 +192,7 @@ impl LocalData {
     fn push(&mut self, local: Local) -> Result<(), &'static str> {
         self.locals.push(local);
         if self.locals.len() == u16::MAX as usize {
-            return Err("Too many locals declared in current program");
+            return Err("Too many locals declared in current function");
         }
         Ok(())
     }
@@ -199,8 +208,8 @@ impl LocalData {
 }
 
 struct Compiler {
-    tokens: Vec<Token>,
-    chunk: Chunk,
+    tokens: Rc<Vec<Token>>,
+    function: Function,
     locals: LocalData,
     current: usize,
     previous: usize,
@@ -209,13 +218,13 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn new(tokens: Vec<Token>, name: String) -> Self {
+    fn new(tokens: Rc<Vec<Token>>, current: usize) -> Self {
         Self {
             tokens,
-            chunk: Chunk::new(name),
+            function: Function::default(),
             locals: LocalData::default(),
-            current: 0,
-            previous: 0,
+            current,
+            previous: current,
             had_error: false,
             panic_mode: false,
         }
@@ -291,6 +300,21 @@ impl Compiler {
     fn is_eof(&self) -> bool {
         self.current_token().ttype == TokenType::EoF
     }
+    fn chunk(&mut self) -> &mut Chunk {
+        &mut self.function.chunk
+    }
+    fn write_opcode(&mut self, opcode: OpCode) {
+        let line = self.previous_token().line;
+        self.chunk().write_opcode(opcode, line);
+    }
+    fn write_constant(&mut self, value: Value) -> Result<(), &'static str> {
+        let line = self.previous_token().line;
+        self.chunk().write_constant(value, line)
+    }
+    fn write_call(&mut self, arg_count: u8) -> Result<(), &'static str> {
+        let line = self.previous_token().line;
+        self.chunk().write_call(arg_count, line)
+    }
 
     fn begin_scope(&mut self) {
         self.locals.scope_depth += 1;
@@ -306,7 +330,8 @@ impl Compiler {
             n_pops += 1;
             self.locals.locals.pop();
         }
-        if let Err(e) = self.chunk.write_endblock(n_pops, self.previous_token().line) {
+        let line = self.previous_token().line;
+        if let Err(e) = self.chunk().write_endblock(n_pops, line) {
             self.error(self.previous, Some(e));
         }
     }
@@ -339,7 +364,7 @@ impl Compiler {
     fn create_variable(&mut self, name: String) -> Option<u16> {
         if self.locals.scope_depth == 0 {
             // create a global variable
-            return match self.chunk.create_constant(Value::String(name)) {
+            return match self.chunk().create_constant(Value::String(name)) {
                 Ok(idx) => Some(idx),
                 Err(e) => {
                     self.error(self.previous, Some(e));
@@ -363,16 +388,38 @@ impl Compiler {
         self.consume(TokenType::Assign, "Expected ':=' after variable name.");
         self.parse_precedence(Precedence::Assignment);
         match idx {
-            Some(idx) => if let Err(e) = self.chunk.write_set_global(idx, self.previous_token().line) {
-                self.error(self.previous, Some(e));
+            Some(idx) => {
+                let line = self.previous_token().line;
+                if let Err(e) = self.chunk().write_set_global(idx, line) {
+                    self.error(self.previous, Some(e));
+                }
             },
-            None => self.chunk.write_opcode(OpCode::SetLocal, self.previous_token().line),
+            None => self.write_opcode(OpCode::SetLocal),
         }
     }
 
     fn expression(&mut self) {
         self.parse_precedence(Precedence::None.next());
-        self.chunk.write_opcode(OpCode::EndExpr, self.previous_token().line);
+        self.write_opcode(OpCode::EndExpr);
+    }
+
+    fn argument_list(&mut self) -> u8 {
+        let mut arg_count = 0;
+        if !self.match_token(TokenType::RParen) && !self.is_eof() {
+            loop {
+                self.expression();
+                if arg_count == u8::MAX {
+                    self.error(self.previous, Some("Too many arguments in function call"));
+                }
+                println!("{}", self.current_token().text);
+                arg_count += 1;
+                if !self.match_token(TokenType::Comma) {
+                    break;
+                }
+            }
+            self.consume(TokenType::RParen, "Expected ')' after arguments.");
+        }
+        arg_count
     }
 
     fn block(&mut self) {
@@ -387,24 +434,60 @@ impl Compiler {
 
     fn if_expr(&mut self) {
         self.expression();
-        let jump_if_idx = match self.chunk.write_jump(OpCode::JumpIfFalse, self.previous_token().line) {
+        let line = self.previous_token().line;
+        let jump_if_idx = match self.chunk().write_jump(OpCode::JumpIfFalse, line) {
             Ok(idx) => idx,
             Err(e) => return self.error(self.previous, Some(e)),
         };
         self.consume(TokenType::LBrace, "Expected '{' after 'if'.");
         self.block();  // expr evaluated if condition is true
-        let jump_else_idx = match self.chunk.write_jump(OpCode::Jump, self.previous_token().line) {
+        let line = self.previous_token().line;
+        let jump_else_idx = match self.chunk().write_jump(OpCode::Jump, line) {
             Ok(idx) => idx,
             Err(e) => return self.error(self.previous, Some(e)),
         };
-        if let Err(e) = self.chunk.patch_jump(jump_if_idx) {
+        if let Err(e) = self.chunk().patch_jump(jump_if_idx) {
             self.error(self.previous, Some(e));
         };
         if self.match_token(TokenType::Else) {
             self.consume(TokenType::LBrace, "Expected '{' after 'else'.");
             self.block();
         }
-        if let Err(e) = self.chunk.patch_jump(jump_else_idx) {
+        if let Err(e) = self.chunk().patch_jump(jump_else_idx) {
+            self.error(self.previous, Some(e));
+        }
+    }
+
+    fn fn_decl(&mut self) {
+        let mut compiler = Compiler::new(self.tokens.clone(), self.current);
+
+        compiler.begin_scope();
+        while !compiler.match_token(TokenType::Pipe) && !compiler.is_eof() {
+            if compiler.function.arity == u8::MAX {
+                compiler.error(compiler.previous, Some("Cannot have more than 255 parameters."));
+            }
+            compiler.function.arity += 1;
+            // read variable name
+            compiler.consume(TokenType::Ident, "Expected function parameter name.");
+            let name = compiler.previous_token().text.clone();
+            if compiler.create_variable(name).is_some() {
+                compiler.error(compiler.previous, Some("Compiler params should be in local scope"));
+            };
+            // check for comma or end of params
+            if compiler.current_token().ttype != TokenType::Pipe {
+                compiler.consume(TokenType::Comma, "Expected ',' after function parameter.");
+            }
+        }
+        compiler.consume(TokenType::LBrace, "Expected '{' before function body");
+        compiler.block();
+        compiler.end_scope();
+
+        self.current = compiler.current;
+        self.previous = compiler.previous;
+        if compiler.had_error {
+            self.had_error = true;
+        }
+        if let Err(e) = self.write_constant(Value::Function(Rc::new(compiler.function))) {
             self.error(self.previous, Some(e));
         }
     }
@@ -416,14 +499,14 @@ impl Compiler {
             TokenType::Float => Value::Float(token.text.parse::<f64>().unwrap()),
             _ => unreachable!(),
         };
-        if let Err(e) = self.chunk.write_constant(value, token.line) {
+        if let Err(e) = self.write_constant(value) {
             self.error(self.previous, Some(e));
         }
     }
     fn string(&mut self) {
         let text = &self.previous_token().text;
         let string = Value::String(text[1..text.len() - 1].to_string());
-        if let Err(e) = self.chunk.write_constant(string, self.previous_token().line) {
+        if let Err(e) = self.write_constant(string) {
             self.error(self.previous, Some(e));
         }
     }
@@ -435,9 +518,13 @@ impl Compiler {
             return;
         }
         // proceed with the assumption that the variable has already been defined
+        let line = self.previous_token().line;
         let res = match self.locals.get_idx(&name) {
-            Some(idx) => self.chunk.write_get_local(idx, self.previous_token().line),
-            None => self.chunk.write_get_global(name.clone(), self.previous_token().line),
+            Some(idx) => self.chunk().write_get_local(idx, line),
+            None => {
+                let name = name.clone();
+                self.chunk().write_get_global(name, line)
+            },
         };
         if let Err(e) = res {
             self.error(self.previous, Some(e));
@@ -450,20 +537,19 @@ impl Compiler {
     fn unary(&mut self) {
         let operator = self.previous_token().ttype;
         self.parse_precedence(Precedence::Unary);
-        self.chunk.write_opcode(
+        self.write_opcode(
             match operator {
                 TokenType::Minus => OpCode::Negate,
                 TokenType::Bang => OpCode::Not,
                 _ => unreachable!(),
-            },
-            self.previous_token().line
+            }
         );
     }
     fn binary(&mut self) {
         let operator = self.previous_token().ttype;
         let rule = RULES.get(&operator).unwrap();
         self.parse_precedence(rule.precedence.next());
-        self.chunk.write_opcode(
+        self.write_opcode(
             match operator {
                 TokenType::Eq => OpCode::Equal,
                 TokenType::NEq => OpCode::NotEqual,
@@ -478,14 +564,19 @@ impl Compiler {
                 TokenType::And => OpCode::And,
                 TokenType::Or => OpCode::Or,
                 _ => unreachable!(),
-            },
-            self.previous_token().line
+            }
         );
+    }
+    fn call(&mut self) {
+        let arg_count = self.argument_list();
+        if let Err(e) = self.write_call(arg_count) {
+            self.error(self.previous, Some(e));
+        }
     }
     fn literal(&mut self) {
         match self.previous_token().ttype {
-            TokenType::True => self.chunk.write_opcode(OpCode::True, self.previous_token().line),
-            TokenType::False => self.chunk.write_opcode(OpCode::False, self.previous_token().line),
+            TokenType::True => self.write_opcode(OpCode::True),
+            TokenType::False => self.write_opcode(OpCode::False),
             _ => unreachable!(),
         }
     }
@@ -494,22 +585,22 @@ impl Compiler {
         while !self.is_eof() {
             self.expression();
         }
-        self.chunk.write_opcode(OpCode::Return, 1);
+        self.chunk().write_opcode(OpCode::Return, 1);
     }
 }
 
-pub fn compile(source: String, name: String) -> Result<Chunk, ()> {
-    let tokens = scan(source);
-    let mut compiler = Compiler::new(tokens, name);
+pub fn compile(source: String) -> Result<Function, ()> {
+    let tokens = Rc::new(scan(source));
+    let mut compiler = Compiler::new(tokens, 0);
     compiler.parse();
 
     #[cfg(feature = "debug")]
-    compiler.chunk.disassemble();
+    compiler.chunk().disassemble();
 
     if compiler.had_error {
         Err(())
     }
     else {
-        Ok(compiler.chunk)
+        Ok(compiler.function)
     }
 }
