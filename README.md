@@ -24,8 +24,11 @@ f := |x| {
 f(4)
 ```
 
-### Compute a sum
+### Compute a sum in two different ways
 ```
-sum := |list| reduce(|acc, x| acc + x, list)
-sum(0 to 10)
+mysum := |list| {
+    reduce(|acc, x| { acc + x }, list, 0)
+}
+
+mysum(0 to 10) = sum(0 to 10)
 ```

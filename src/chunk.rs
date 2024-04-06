@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use crate::Value;
@@ -105,7 +106,7 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable to bytes")
     }
     pub fn write_get_global(&mut self, name: String, line: usize) -> Result<(), &'static str> {
-        let idx = self.create_constant(Value::String(name))?;
+        let idx = self.create_constant(Value::String(Rc::new(name)))?;
         self.write_opcode(OpCode::GetGlobal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable name to bytes")
     }

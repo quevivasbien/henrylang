@@ -136,7 +136,7 @@ lazy_static! {
         );
         map.insert(
             TokenType::RightArrow,
-            ParseRule::new(None, Some(Compiler::binary), Precedence::Call),
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Assignment),
         );
         map.insert(
             TokenType::Int,
@@ -381,7 +381,9 @@ impl Compiler {
     fn create_variable(&mut self, name: String) -> Option<u16> {
         if self.locals.scope_depth == 0 {
             // create a global variable
-            return match self.chunk().create_constant(Value::String(name)) {
+            return match self.chunk().create_constant(Value::String(
+                Rc::new(name)
+            )) {
                 Ok(idx) => Some(idx),
                 Err(e) => {
                     self.error(self.previous, Some(e));
@@ -543,7 +545,9 @@ impl Compiler {
 
     fn string(&mut self) {
         let text = &self.previous_token().text;
-        let string = Value::String(text[1..text.len() - 1].to_string());
+        let string = Value::String(
+            Rc::new(text[1..text.len() - 1].to_string()
+        ));
         if let Err(e) = self.write_constant(string) {
             self.error(self.previous, Some(e));
         }

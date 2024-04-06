@@ -10,6 +10,10 @@ pub enum InterpreterError {
     RuntimeError(&'static str),
 }
 
+pub fn runtime_err(e: &'static str) -> InterpreterError {
+    InterpreterError::RuntimeError(e)
+}
+
 #[derive(Debug)]
 struct CallFrame {
     function: Rc<Function>,
@@ -25,9 +29,9 @@ impl CallFrame {
 
 #[derive(Debug)]
 pub struct VM {
-    stack: Vec<Value>,
-    globals: HashMap<String, Value>,
-    last_value: Option<Value>,
+    pub stack: Vec<Value>,
+    pub globals: HashMap<String, Value>,
+    pub last_value: Option<Value>,
 }
 
 impl VM {
@@ -59,7 +63,7 @@ impl VM {
         }
     }
 
-    fn call_function(&mut self, n_args: u8, function: Rc<Function>) -> Result<(), InterpreterError> {
+    pub fn call_function(&mut self, n_args: u8, function: Rc<Function>) -> Result<(), InterpreterError> {
         if n_args != function.arity {
             return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
         }
@@ -74,12 +78,34 @@ impl VM {
         Ok(())
     }
 
-    fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
+    pub fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
         if n_args != function.arity {
             return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
         }
         let args = self.stack.split_off(self.stack.len() - n_args as usize);
-        let result = (function.function)(&args).map_err(|e| InterpreterError::RuntimeError(e))?;
+        let result = (function.function)(self, &args)?;
+        self.stack.pop();
+        self.stack.push(result);
+        Ok(())
+    }
+
+    pub fn array_index(&mut self, n_args: u8, arr: &Vec<Value>) -> Result<(), InterpreterError> {
+        if n_args != 1 {
+            return Err(InterpreterError::RuntimeError("Can only access arrays with a single index"));
+        }
+        let result = match self.stack.pop() {
+            Some(Value::Int(mut idx)) => {
+                if idx < 0 {
+                    idx = arr.len() as i64 + idx;
+                }
+                if idx < 0 || idx >= arr.len() as i64 {
+                    return Err(InterpreterError::RuntimeError("Array index out of bounds"));
+                }
+                arr[idx as usize].clone()
+            },
+            Some(_) => return Err(InterpreterError::RuntimeError("Array index must be an integer")),
+            None => return Err(InterpreterError::RuntimeError("Missing array index")),
+        };
         self.stack.pop();
         self.stack.push(result);
         Ok(())
@@ -163,41 +189,21 @@ impl VM {
                     match &self.stack[self.stack.len()-n_args as usize-1] {
                         Value::Function(f) => self.call_function(n_args, f.clone())?,
                         Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
+                        Value::Array(arr) => self.array_index(n_args, &arr.clone())?,
                         _ => return Err(InterpreterError::RuntimeError("Attempted to call non-function")),
                     };
                 },
                 OpCode::Array => {
                     let n_elems = chunk.read_u16(&mut frame.ip);
-                    let array = self.stack.split_off(self.stack.len() - n_elems as usize);
+                    let array = Rc::new(
+                        self.stack.split_off(self.stack.len() - n_elems as usize)
+                    );
                     self.stack.push(Value::Array(array));
                 },
                 OpCode::Map => {
-                    let right = match self.stack.pop() {
-                        Some(Value::Array(x)) => x,
-                        None => return Err(InterpreterError::RuntimeError("Attempted to call map on null RHS")),
-                        Some(_) => return Err(InterpreterError::RuntimeError("Cannot call map with non-array on RHS")),
-                    };
-                    let n_elems = right.len();
-                    match self.stack.pop() {
-                        Some(Value::Function(f)) => {
-                            for value in right.into_iter() {
-                                self.stack.push(Value::Bool(false)); // just a placeholder
-                                self.stack.push(value);
-                                self.call_function(1, f.clone())?;
-                            }
-                        },
-                        Some(Value::NativeFunction(f)) => {
-                            for value in right.into_iter() {
-                                self.stack.push(Value::Bool(false)); // just a placeholder
-                                self.stack.push(value);
-                                self.call_native_function(1, f)?;
-                            }
-                        },
-                        None => return Err(InterpreterError::RuntimeError("Attempted to call map with null LHS")),
-                        Some(_) => return Err(InterpreterError::RuntimeError("Cannot call map with non-function on LHS")),
-                    };
-                    let array = self.stack.split_off(self.stack.len() - n_elems);
-                    self.stack.push(Value::Array(array));
+                    let args = self.stack.split_off(self.stack.len() - 2);
+                    let result = (builtins::MAP.function)(self, &args)?;
+                    self.stack.push(result);
                 },
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut frame.ip);
@@ -213,14 +219,14 @@ impl VM {
                         Some(x) => x.clone(),
                         None => return Err(InterpreterError::RuntimeError("Attempted to set null global")),
                     };
-                    self.globals.insert(name, value);
+                    self.globals.insert(name.as_ref().clone(), value);
                 },
                 OpCode::GetGlobal => {
                     let name = match &chunk.read_constant(&mut frame.ip) {
                         Value::String(name) => name,
                         _ => unreachable!("Global name was not a string"),
                     };
-                    match self.globals.get(name) {
+                    match self.globals.get(name.as_ref()) {
                         Some(x) => self.stack.push(x.clone()),
                         None => return Err(InterpreterError::RuntimeError("Variable is undefined")),
                     };

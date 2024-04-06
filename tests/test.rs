@@ -1,6 +1,18 @@
 use approx::assert_relative_eq;
 use henrylang::*;
 
+macro_rules! run_expect_value {
+    ($source:expr, $variant:ident) => {
+        match VM::new().interpret($source.to_string())
+            .unwrap()
+            .expect("Should be a value")
+        {
+            Value::$variant(x) => x,
+            _ => panic!("Should be a {}", stringify!($variant)),
+        }
+    }
+}
+
 #[test]
 fn test_fib() {
     let source = "fib_helper := |n, x, y| {
@@ -25,15 +37,8 @@ fn test_fib() {
     fib(80)
     ";
 
-    let result = VM::new().interpret(source.to_string())
-        .unwrap()
-        .expect("Should be a value")
-    ;
-    let value = match result {
-        Value::Int(x) => x,
-        _ => panic!("Should be an Int"),
-    };
-    assert_eq!(value, 23416728348467685);
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 23416728348467685);
 }
 
 #[test]
@@ -43,7 +48,7 @@ fn test_euler() {
             1
         }
         else {
-            x * factorial(x - 1)
+            prod(1 to x)
         }
     }
     
@@ -59,13 +64,33 @@ fn test_euler() {
     approx_e(20)
     ";
 
-    let result = VM::new().interpret(source.to_string())
-        .unwrap()
-        .expect("Should be a value")
-    ;
-    let value = match result {
-        Value::Float(x) => x,
-        _ => panic!("Should be an Float"),
-    };
-    assert_relative_eq!(value, 2.718281828459045);
+    let result = run_expect_value!(source, Float);
+    assert_relative_eq!(result, 2.718281828459045);
+}
+
+#[test]
+fn test_builtins() {
+    let result = run_expect_value!("sum(0 to 4)", Int);
+    assert_eq!(result, 10);
+
+    let result = run_expect_value!("prod(1 to 4)", Int);
+    assert_eq!(result, 24);
+
+    let result = run_expect_value!("sum(string -> (0 to 4))", String);
+    assert_eq!(result.as_ref(), "01234");
+
+    let result = run_expect_value!("max(|x| { -2 * x*x + x + 4 } -> (-4 to 4))", Int);
+    assert_eq!(result, 4);
+
+    let result = run_expect_value!("min(|x| { -2 * x*x + x + 4 } -> (-4 to 4))", Int);
+    assert_eq!(result, -32);
+
+    let result = run_expect_value!("sum(|x| { if x > 0 {x} else {-x} } -> filter(|x| {x > 4}, -500 to 500))", Int);
+    assert_eq!(result, 125240);
+
+    let result = run_expect_value!("sum(0 to 100) = reduce(|acc, x| { acc + x }, 0 to 100, 0)", Bool);
+    assert!(result);
+
+    let result = run_expect_value!("0 to 100 = reduce(|acc, x| { acc + [x] }, 0 to 100, [])", Bool);
+    assert!(result);
 }

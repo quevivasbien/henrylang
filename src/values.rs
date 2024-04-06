@@ -2,7 +2,7 @@ use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, S
 use std::rc::Rc;
 // use downcast_rs::{impl_downcast, DowncastSync};
 
-use crate::Chunk;
+use crate::{vm::InterpreterError, Chunk, VM};
 
 // #[derive(Debug, PartialEq)]
 // pub enum ObjectType {
@@ -79,7 +79,7 @@ impl Default for Function {
 pub struct NativeFunction {
     pub name: &'static str,
     pub arity: u8,
-    pub function: fn(&[Value]) -> Result<Value, &'static str>,
+    pub function: fn(&mut VM, &[Value]) -> Result<Value, InterpreterError>,
 }
 
 impl Debug for NativeFunction {
@@ -93,8 +93,8 @@ pub enum Value {
     Float(f64),
     Int(i64),
     Bool(bool),
-    String(String),
-    Array(Vec<Value>),
+    String(Rc<String>),
+    Array(Rc<Vec<Value>>),
     Function(Rc<Function>),
     NativeFunction(&'static NativeFunction),
     // Object(Rc<dyn Object>),
@@ -111,6 +111,9 @@ impl Display for Value {
             Value::NativeFunction(x) => write!(f, "{:?}", x),
             Value::Array(x) => {    
                 write!(f, "[")?;
+                if x.is_empty() {
+                    return write!(f, "]");
+                }
                 for v in x.iter().take(x.len() - 1) {
                     write!(f, "{}", v)?;
                     write!(f, ", ")?;
@@ -129,8 +132,12 @@ impl Add<Value> for Value {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x + y)),
             (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot add booleans"),
-            (Value::String(x), Value::String(y)) => Ok(Value::String([x, y].concat())),
-            (Value::Array(x), Value::Array(y)) => Ok(Value::Array([x, y].concat())),
+            (Value::String(x), Value::String(y)) => Ok(Value::String(Rc::new(format!("{}{}", x, y)))),
+            (Value::Array(x), Value::Array(y)) => Ok(Value::Array({
+                let mut v = x.as_ref().clone();
+                v.append(&mut y.as_ref().clone());
+                Rc::new(v)
+            })),
             (Value::Function(_x), Value::Function(_y)) => Err("Cannot add functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot add functions"),
             _ => Err("Cannot add values of different types"),
@@ -329,10 +336,14 @@ impl Value {
         match (self, rhs) {
             (Value::Int(x), Value::Int(y)) => {
                 if x > y {
-                    Ok(Value::Array((y..=x).rev().map(Value::Int).collect()))
+                    Ok(Value::Array(
+                        Rc::new((y..=x).rev().map(Value::Int).collect()))
+                    )
                 }
                 else {
-                    Ok(Value::Array((x..=y).map(Value::Int).collect()))
+                    Ok(Value::Array(
+                        Rc::new((x..=y).map(Value::Int).collect()))
+                    )
                 }
             },
             _ => Err("Can only create ranges from Ints"),
