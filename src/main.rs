@@ -1,20 +1,7 @@
-mod chunk;
-mod compiler;
-mod scanner;
-mod token;
-mod values;
-mod vm;
-
 use std::env;
 use stdio::Write;
 
-use chunk::{Chunk, OpCode};
-use scanner::scan;
-use token::{TokenType, Token};
-use values::{Function, Value};
-use vm::VM;
-
-use compiler::compile;
+use henrylang::VM;
 
 fn repl(vm: &mut VM) {
     println!("henry repl");

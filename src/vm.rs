@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 use std::rc::Rc;
 
-use crate::{Function, OpCode, Value, compile};
+use crate::{Function, NativeFunction, OpCode, Value, builtins, compile};
 
 #[derive(Debug)]
 pub enum InterpreterError {
@@ -34,7 +34,7 @@ impl VM {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
-            globals: HashMap::new(),
+            globals: builtins(),
             last_value: None
         }
     }
@@ -59,6 +59,32 @@ impl VM {
         }
     }
 
+    fn call_function(&mut self, n_args: u8, function: Rc<Function>) -> Result<(), InterpreterError> {
+        if n_args != function.arity {
+            return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
+        }
+        let new_frame = CallFrame::new(function, self.stack.len() - n_args as usize - 1);
+        let result = match self.call(new_frame)? {
+            Some(x) => x,
+            None => Value::Bool(false),
+        };
+        // clear stack used by function and function args
+        self.stack.truncate(self.stack.len() - n_args as usize - 1);
+        self.stack.push(result);
+        Ok(())
+    }
+
+    fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
+        if n_args != function.arity {
+            return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
+        }
+        let args = self.stack.split_off(self.stack.len() - n_args as usize);
+        let result = (function.function)(&args).map_err(|e| InterpreterError::RuntimeError(e))?;
+        self.stack.pop();
+        self.stack.push(result);
+        Ok(())
+    }
+
     fn call(&mut self, mut frame: CallFrame) -> Result<Option<Value>, InterpreterError> {
         let chunk = &frame.function.chunk;
         #[cfg(feature = "debug")]
@@ -74,7 +100,7 @@ impl VM {
             #[cfg(feature = "debug")]
             {
                 print!("stack: {:?}, ", &self.stack[frame.stack_idx..]);
-                print!("globals: {:?}, ", self.globals);
+                // print!("globals: {:?}, ", self.globals);
                 println!("last_value: {:?}", self.last_value);
                 let mut ip_copy = frame.ip;
                 chunk.disassemble_instruction(&mut ip_copy);
@@ -100,6 +126,7 @@ impl VM {
                 OpCode::Divide => self.binary_op(Value::div)?,
                 OpCode::And => self.binary_op(Value::bitand)?,
                 OpCode::Or => self.binary_op(Value::bitor)?,
+                OpCode::To => self.binary_op(Value::range)?,
                 OpCode::Negate => self.unary_op(Value::neg)?,
                 OpCode::Not => self.unary_op(Value::not)?,
                 OpCode::EndExpr => {
@@ -133,19 +160,44 @@ impl VM {
                 },
                 OpCode::Call => {
                     let n_args = chunk.read_u8(&mut frame.ip);
-                    let caller = match &self.stack[self.stack.len()-n_args as usize-1] {
-                        Value::Function(f) => f.clone(),
+                    match &self.stack[self.stack.len()-n_args as usize-1] {
+                        Value::Function(f) => self.call_function(n_args, f.clone())?,
+                        Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
                         _ => return Err(InterpreterError::RuntimeError("Attempted to call non-function")),
                     };
-                    
-                    let new_frame = CallFrame::new(caller, self.stack.len() - n_args as usize - 1);
-                    let result = match self.call(new_frame)? {
-                        Some(x) => x,
-                        None => Value::Bool(false),
+                },
+                OpCode::Array => {
+                    let n_elems = chunk.read_u16(&mut frame.ip);
+                    let array = self.stack.split_off(self.stack.len() - n_elems as usize);
+                    self.stack.push(Value::Array(array));
+                },
+                OpCode::Map => {
+                    let right = match self.stack.pop() {
+                        Some(Value::Array(x)) => x,
+                        None => return Err(InterpreterError::RuntimeError("Attempted to call map on null RHS")),
+                        Some(_) => return Err(InterpreterError::RuntimeError("Cannot call map with non-array on RHS")),
                     };
-                    // clear stack used by function and function args
-                    self.stack.truncate(self.stack.len() - n_args as usize - 1);
-                    self.stack.push(result);
+                    let n_elems = right.len();
+                    match self.stack.pop() {
+                        Some(Value::Function(f)) => {
+                            for value in right.into_iter() {
+                                self.stack.push(Value::Bool(false)); // just a placeholder
+                                self.stack.push(value);
+                                self.call_function(1, f.clone())?;
+                            }
+                        },
+                        Some(Value::NativeFunction(f)) => {
+                            for value in right.into_iter() {
+                                self.stack.push(Value::Bool(false)); // just a placeholder
+                                self.stack.push(value);
+                                self.call_native_function(1, f)?;
+                            }
+                        },
+                        None => return Err(InterpreterError::RuntimeError("Attempted to call map with null LHS")),
+                        Some(_) => return Err(InterpreterError::RuntimeError("Cannot call map with non-function on LHS")),
+                    };
+                    let array = self.stack.split_off(self.stack.len() - n_elems);
+                    self.stack.push(Value::Array(array));
                 },
                 OpCode::Constant => {
                     let constant = chunk.read_constant(&mut frame.ip);

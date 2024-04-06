@@ -13,6 +13,7 @@ enum Precedence {
     And,
     Equality,
     Comparison,
+    Range,
     Term,
     Factor,
     Unary,
@@ -74,6 +75,10 @@ lazy_static! {
             ParseRule::new(Some(Compiler::fn_decl), None, Precedence::None),
         );
         map.insert(
+            TokenType::LSquare,
+            ParseRule::new(Some(Compiler::array), None, Precedence::None),
+        );
+        map.insert(
             TokenType::Eq,
             ParseRule::new(None, Some(Compiler::binary), Precedence::Equality),
         );
@@ -124,6 +129,14 @@ lazy_static! {
         map.insert(
             TokenType::Or,
             ParseRule::new(None, Some(Compiler::binary), Precedence::Or),
+        );
+        map.insert(
+            TokenType::To,
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Range),
+        );
+        map.insert(
+            TokenType::RightArrow,
+            ParseRule::new(None, Some(Compiler::binary), Precedence::Call),
         );
         map.insert(
             TokenType::Int,
@@ -315,6 +328,10 @@ impl Compiler {
         let line = self.previous_token().line;
         self.chunk().write_call(arg_count, line)
     }
+    fn write_array(&mut self, num_elems: u16) -> Result<(), &'static str> {
+        let line = self.previous_token().line;
+        self.chunk().write_array(num_elems, line)
+    }
 
     fn begin_scope(&mut self) {
         self.locals.scope_depth += 1;
@@ -410,7 +427,6 @@ impl Compiler {
                 if arg_count == u8::MAX {
                     self.error(self.previous, Some("Too many arguments in function call"));
                 }
-                println!("{}", self.current_token().text);
                 arg_count += 1;
                 if !self.match_token(TokenType::Comma) {
                     break;
@@ -493,6 +509,26 @@ impl Compiler {
         }
     }
 
+    fn array(&mut self) {
+        let mut num_elems = 0;
+        if !self.match_token(TokenType::RSquare) && !self.is_eof() {
+            loop {
+                self.expression();
+                if num_elems == u16::MAX {
+                    self.error(self.previous, Some("Too many elements in list"));
+                }
+                num_elems += 1;
+                if !self.match_token(TokenType::Comma) {
+                    break;
+                }
+            }
+            self.consume(TokenType::RSquare, "Expected ']' after array elements.");
+        }
+        if let Err(e) = self.write_array(num_elems) {
+            self.error(self.previous, Some(e));
+        }
+    }
+
     fn number(&mut self) {
         let token = self.previous_token();
         let value = match token.ttype {
@@ -504,6 +540,7 @@ impl Compiler {
             self.error(self.previous, Some(e));
         }
     }
+
     fn string(&mut self) {
         let text = &self.previous_token().text;
         let string = Value::String(text[1..text.len() - 1].to_string());
@@ -511,6 +548,7 @@ impl Compiler {
             self.error(self.previous, Some(e));
         }
     }
+
     fn variable(&mut self) {
         let name = &self.previous_token().text;
         // check whether this is an assignment
@@ -531,10 +569,12 @@ impl Compiler {
             self.error(self.previous, Some(e));
         }
     }
+
     fn grouping(&mut self) {
         self.parse_precedence(Precedence::None.next());
         self.consume(TokenType::RParen, "Expected ')' after expression.");
     }
+
     fn unary(&mut self) {
         let operator = self.previous_token().ttype;
         self.parse_precedence(Precedence::Unary);
@@ -546,6 +586,7 @@ impl Compiler {
             }
         );
     }
+
     fn binary(&mut self) {
         let operator = self.previous_token().ttype;
         let rule = RULES.get(&operator).unwrap();
@@ -564,16 +605,20 @@ impl Compiler {
                 TokenType::Slash => OpCode::Divide,
                 TokenType::And => OpCode::And,
                 TokenType::Or => OpCode::Or,
+                TokenType::To => OpCode::To,
+                TokenType::RightArrow => OpCode::Map,
                 _ => unreachable!(),
             }
         );
     }
+
     fn call(&mut self) {
         let arg_count = self.argument_list();
         if let Err(e) = self.write_call(arg_count) {
             self.error(self.previous, Some(e));
         }
     }
+
     fn literal(&mut self) {
         match self.previous_token().ttype {
             TokenType::True => self.write_opcode(OpCode::True),

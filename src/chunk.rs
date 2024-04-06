@@ -25,6 +25,7 @@ pub enum OpCode {
     Divide,
     And,
     Or,
+    To,
     
     // Unary operations
     Negate,
@@ -35,6 +36,8 @@ pub enum OpCode {
     Jump,
     JumpIfFalse,
     Call,
+    Array,
+    Map,
     
     Constant,
     SetGlobal,
@@ -143,6 +146,11 @@ impl Chunk {
         self.bytes.write_u8(arg_count).map_err(|_| "Failed to write number of arguments to bytes")
     }
 
+    pub fn write_array(&mut self, num_elems: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::Array, line);
+        self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
+    }
+
     pub fn read_u8(&self, ip: &mut usize) -> u8 {
         let out = self.bytes[*ip];
         *ip += 1;
@@ -223,6 +231,9 @@ impl Chunk {
             OpCode::Or => {
                 println!("{:04} OR", ip0);
             },
+            OpCode::To => {
+                println!("{:04} TO", ip0);
+            },
             OpCode::Negate => {
                 println!("{:04} NEGATE", ip0);
             },
@@ -247,6 +258,13 @@ impl Chunk {
             OpCode::Call => {
                 let arg_count = self.read_u8(ip);
                 println!("{:04} CALL {}", ip0, arg_count);
+            },
+            OpCode::Array => {
+                let num_elems = self.read_u16(ip);
+                println!("{:04} ARRAY {}", ip0, num_elems);  
+            },
+            OpCode::Map => {
+                println!("{:04} MAP", ip0);
             },
             OpCode::Constant => {
                 let constant = self.read_constant(ip);

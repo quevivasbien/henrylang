@@ -9,10 +9,13 @@ pub enum TokenType {
     LBrace,
     RBrace,
     Pipe,
+    LSquare,
+    RSquare,
 
     Comma,
     Dot,
     Colon,
+    RightArrow,
 
     Eq,
     NEq,
@@ -55,11 +58,12 @@ lazy_static! {
         map.insert('{', TokenType::LBrace);
         map.insert('}', TokenType::RBrace);
         map.insert('|', TokenType::Pipe);
+        map.insert('[', TokenType::LSquare);
+        map.insert(']', TokenType::RSquare);
         map.insert('.', TokenType::Dot);
         map.insert(',', TokenType::Comma);
         map.insert('=', TokenType::Eq);
         map.insert('+', TokenType::Plus);
-        map.insert('-', TokenType::Minus);
         map.insert('/', TokenType::Slash);
         map.insert('*', TokenType::Star);
 

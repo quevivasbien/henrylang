@@ -189,6 +189,17 @@ impl Scanner {
                     }
                 );
             },
+            '-' => {
+                let is_right_arrow = self.match_char('>');
+                return self.make_token(
+                    if is_right_arrow {
+                        TokenType::RightArrow
+                    }
+                    else {
+                        TokenType::Minus
+                    }
+                )
+            },
             _ => (),
         };
 
