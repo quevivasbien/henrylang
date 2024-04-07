@@ -2,76 +2,42 @@ use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, S
 use std::rc::Rc;
 // use downcast_rs::{impl_downcast, DowncastSync};
 
-use crate::{vm::InterpreterError, Chunk, VM};
-
-// #[derive(Debug, PartialEq)]
-// pub enum ObjectType {
-//     String
-// }
-
-// pub trait Object: DowncastSync {
-//     fn get_type(&self) -> ObjectType;
-//     fn string(&self) -> String {
-//         format!("{:?}", self.get_type())
-//     }
-// }
-// impl_downcast!(sync Object);
-
-// impl Debug for dyn Object {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self.string())
-//     }
-// }
-
-// pub struct ObjectString {
-//     pub value: String
-// }
-
-// impl Object for ObjectString {
-//     fn get_type(&self) -> ObjectType {
-//         ObjectType::String
-//     }
-//     fn string(&self) -> String {
-//         self.value.clone()
-//     }
-// }
-
-// impl ObjectString {
-//     pub fn new(value: String) -> Self {
-//         Self { value }
-//     }
-// }
-
-// fn add_objects(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-//     match (x.get_type(), y.get_type()) {
-//         (ObjectType::String, ObjectType::String) => Ok(Value::Object(
-//             Rc::new(ObjectString { value: format!("{}{}", x.string(), y.string()) })
-//         )),
-//         _ => Err("Add not implemented for this object type"),
-//     }
-// }
-
-// fn objects_eq(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-//     match (x.get_type(), y.get_type()) {
-//         (ObjectType::String, ObjectType::String) => Ok(Value::Bool(x.string() == y.string())),
-//         _ => Err("Equality comparison not implemented for this object type"),
-//     }
-// }
+use crate::{vm::{InterpreterError, VM}, Chunk};
 
 pub struct Function {
+    pub num_upvalues: u16,
     pub arity: u8,
     pub chunk: Chunk,
 }
 
-impl Debug for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}]{{{}}}", self.arity, self.chunk.len())
+impl Default for Function {
+    fn default() -> Self {
+        Self { num_upvalues: 0, arity: 0, chunk: Chunk::new() }
     }
 }
 
-impl Default for Function {
-    fn default() -> Self {
-        Self { arity: 0, chunk: Chunk::new() }
+impl Debug for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]({}){{{}}}", self.num_upvalues, self.arity, self.chunk.len())
+    }
+}
+
+#[derive(Clone)]
+pub struct Closure {
+    pub function: Rc<Function>,
+    pub upvalues: Vec<Value>,
+}
+
+impl Debug for Closure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "up{:?}fn{:?}", self.upvalues, self.function)
+    }
+}
+
+impl Closure {
+    pub fn new(function: Rc<Function>) -> Self {
+        let upvalues = Vec::with_capacity(function.num_upvalues as usize);
+        Self { function, upvalues }
     }
 }
 
@@ -95,7 +61,7 @@ pub enum Value {
     Bool(bool),
     String(Rc<String>),
     Array(Rc<Vec<Value>>),
-    Function(Rc<Function>),
+    Closure(Box<Closure>),
     NativeFunction(&'static NativeFunction),
     // Object(Rc<dyn Object>),
 }
@@ -107,7 +73,7 @@ impl Display for Value {
             Value::Int(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::String(x) => write!(f, "{}", x),
-            Value::Function(x) => write!(f, "{:?}", x),
+            Value::Closure(x) => write!(f, "{:?}", x),
             Value::NativeFunction(x) => write!(f, "{:?}", x),
             Value::Array(x) => {    
                 write!(f, "[")?;
@@ -138,7 +104,7 @@ impl Add<Value> for Value {
                 v.append(&mut y.as_ref().clone());
                 Rc::new(v)
             })),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot add functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot add functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot add functions"),
             _ => Err("Cannot add values of different types"),
         }
@@ -154,7 +120,7 @@ impl Sub<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot subtract booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot subtract strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot subtract arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot subtract functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot subtract functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot subtract functions"),
             _ => Err("Cannot subtract values of different types"),
         }
@@ -170,7 +136,7 @@ impl Mul<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot multiply booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot multiply strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot multiply arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot multiply functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot multiply functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot multiply functions"),
             _ => Err("Cannot multiply values of different types"),
         }
@@ -186,7 +152,7 @@ impl Div<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot divide booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot divide strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot divide arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot divide functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot divide functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot divide functions"),
             _ => Err("Cannot divide values of different types"),
         }

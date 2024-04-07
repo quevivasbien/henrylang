@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
+use crate::compiler;
 use crate::Value;
 
 #[derive(Debug)]
@@ -45,6 +46,9 @@ pub enum OpCode {
     GetGlobal,
     SetLocal,
     GetLocal,
+    Closure,
+    // SetUpvalue,
+    GetUpvalue,
 }
 
 impl From<u8> for OpCode {
@@ -101,6 +105,25 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
+    pub fn write_closure(&mut self, value: Value, upvalues: Vec<compiler::Upvalue>, line: usize) -> Result<(), &'static str> {
+        match &value {
+            Value::Closure(func) => func.clone(),
+            _ => return Err("Value is not a closure"),
+        };
+        println!("Writing closure: {:?}", value);
+        println!("Upvalues: {:?}", upvalues);
+        let idx = self.create_constant(value)?;
+        self.write_opcode(OpCode::Closure, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
+        for upvalue in upvalues.iter() {
+            self.bytes.write_u8(
+                if upvalue.is_local { 1 } else { 0 }
+            ).map_err(|_| "Failed to write upvalue locality to bytes")?;
+            self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
+        }
+        Ok(())
+    }
+
     pub fn write_set_global(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
         self.write_opcode(OpCode::SetGlobal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable to bytes")
@@ -114,6 +137,11 @@ impl Chunk {
     pub fn write_get_local(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
         self.write_opcode(OpCode::GetLocal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of local variable to bytes")
+    }
+
+    pub fn write_get_upvalue(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::GetUpvalue, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of upvalue to bytes")
     }
 
     pub fn write_endblock(&mut self, n_pops: u16, line: usize) -> Result<(), &'static str> {
@@ -285,6 +313,22 @@ impl Chunk {
             OpCode::GetLocal => {
                 let idx = self.read_u16(ip);
                 println!("{:04} GETLOCAL {}", ip0, idx);
+            },
+            OpCode::Closure => {
+                println!("{:04} CLOSURE", ip0);
+                let closure = match self.read_constant(ip) {
+                    Value::Closure(f) => f,
+                    _ => unreachable!(),
+                };
+                for _ in 0..closure.function.num_upvalues {
+                    let is_local = self.read_u8(ip) == 1;
+                    let index = self.read_u16(ip);
+                    println!("{:04} | UPVALUE {} {}", *ip - 2, is_local, index);
+                }
+            },
+            OpCode::GetUpvalue => {
+                let idx = self.read_u16(ip);
+                println!("{:04} GETUPVALUE {}", ip0, idx);
             },
         }
         return false

@@ -69,6 +69,27 @@ fn test_euler() {
 }
 
 #[test]
+fn test_closure() {
+    let source = "
+    f := |x| {
+        a := x
+        g := || {
+            add_a := |z| { a + z }
+            add_a
+        }
+        add_a := g()
+    
+        add_a(2)
+    }
+    
+    sum(f -> 0 to 3)
+    ";
+
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 14);
+}
+
+#[test]
 fn test_builtins() {
     let result = run_expect_value!("sum(0 to 4)", Int);
     assert_eq!(result, 10);

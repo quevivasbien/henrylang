@@ -171,7 +171,7 @@ lazy_static! {
             };
             let mut out = Vec::new();
             match &args[0] {
-                Value::Function(f) => {
+                Value::Closure(f) => {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
@@ -235,7 +235,7 @@ lazy_static! {
             };
             let n_elems = right.len();
             match &args[0] {
-                Value::Function(f) => {
+                Value::Closure(f) => {
                     for value in right.iter() {
                         vm.stack.push(Value::Bool(false)); // just a placeholder
                         vm.stack.push(value.clone());
@@ -275,15 +275,15 @@ lazy_static! {
             };
             let mut acc = args[2].clone();
             match &args[0] {
-                Value::Function(f) => {
-                    if f.arity != 2 {
+                Value::Closure(c) => {
+                    if c.function.arity != 2 {
                         return Err(runtime_err("Reduce function must take two arguments"));
                     }
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(acc.clone());
                         vm.stack.push(value.clone());
-                        vm.call_function(2, f.clone())?;
+                        vm.call_function(2, c.clone())?;
                         acc = vm.stack.pop().ok_or(runtime_err("Call to reduce resulted in empty stack"))?;
                     }
                 },
