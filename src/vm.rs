@@ -8,11 +8,7 @@ use crate::{Closure, Function, NativeFunction, OpCode, Value, builtins, compile}
 #[derive(Debug)]
 pub enum InterpreterError {
     CompileError,
-    RuntimeError(&'static str),
-}
-
-pub fn runtime_err(e: &'static str) -> InterpreterError {
-    InterpreterError::RuntimeError(e)
+    RuntimeError(String),
 }
 
 pub struct CallFrame {
@@ -78,29 +74,40 @@ impl VM {
         &self.frames.last().unwrap().closure.function.chunk
     }
 
-    fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
+    pub fn runtime_err(&self, e: String) -> InterpreterError {
+        // print stack trace
+        for frame in self.frames.iter() {
+            println!("On line {} of {:?}", frame.closure.function.chunk.line_num(frame.ip), frame.closure.function);
+        }
+        // return error
+        InterpreterError::RuntimeError(e.to_string())
+    }
+
+    fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, String>) -> Result<(), InterpreterError> {
         match (self.stack.pop(), self.stack.pop()) {
             (Some(x), Some(y)) => match op(y, x) {
                 Ok(x) => Ok(self.stack.push(x)),
-                Err(e) => return Err(InterpreterError::RuntimeError(e)),
+                Err(e) => return Err(self.runtime_err(e)),
             },
-            _ => Err(InterpreterError::RuntimeError("Attempted to perform binary operation on null")),
+            _ => panic!("Attempted to perform binary with empty stack"),
         }
     }
 
-    fn unary_op(&mut self, op: fn(Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
+    fn unary_op(&mut self, op: fn(Value) -> Result<Value, String>) -> Result<(), InterpreterError> {
         match self.stack.pop() {
             Some(x) => match op(x) {
                 Ok(x) => Ok(self.stack.push(x)),
-                Err(e) => return Err(InterpreterError::RuntimeError(e)),
+                Err(e) => return Err(self.runtime_err(e)),
             },
-            None => Err(InterpreterError::RuntimeError("Attempted to perform unary operation on null")),
+            None => panic!("Attempted to perform unary with empty stack"),
         }
     }
 
     pub fn call_function(&mut self, n_args: u8, closure: Box<Closure>) -> Result<(), InterpreterError> {
         if n_args != closure.function.arity {
-            return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
+            return Err(self.runtime_err(
+                format!("Incorrect number of arguments: Expected {}, got {}.", closure.function.arity, n_args)
+            ));
         }
         let new_frame = CallFrame::new(closure, self.stack.len() - n_args as usize - 1);
         self.frames.push(new_frame);
@@ -116,7 +123,9 @@ impl VM {
 
     pub fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
         if n_args != function.arity {
-            return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
+            return Err(self.runtime_err(
+                format!("Incorrect number of arguments: Expected {}, got {}.", function.arity, n_args)
+            ));
         }
         let args = self.stack.split_off(self.stack.len() - n_args as usize);
         let result = (function.function)(self, &args)?;
@@ -127,7 +136,9 @@ impl VM {
 
     pub fn array_index(&mut self, n_args: u8, arr: &Vec<Value>) -> Result<(), InterpreterError> {
         if n_args != 1 {
-            return Err(InterpreterError::RuntimeError("Can only access arrays with a single index"));
+            return Err(self.runtime_err(
+                format!("When accessing array, expected 1 index, got {}", n_args)
+            ));
         }
         let result = match self.stack.pop() {
             Some(Value::Int(mut idx)) => {
@@ -135,12 +146,16 @@ impl VM {
                     idx = arr.len() as i64 + idx;
                 }
                 if idx < 0 || idx >= arr.len() as i64 {
-                    return Err(InterpreterError::RuntimeError("Array index out of bounds"));
+                    return Err(self.runtime_err(
+                        format!("Index {} out of bounds for array of length {}", idx, arr.len())
+                    ));
                 }
                 arr[idx as usize].clone()
             },
-            Some(_) => return Err(InterpreterError::RuntimeError("Array index must be an integer")),
-            None => return Err(InterpreterError::RuntimeError("Missing array index")),
+            Some(x) => return Err(self.runtime_err(
+                format!("When accessing array, expected index to be an integer, got {}", x)
+            )),
+            None => panic!("Attempted to perform array access with empty stack"),
         };
         self.stack.pop();
         self.stack.push(result);
@@ -149,7 +164,7 @@ impl VM {
 
     fn call(&mut self) -> Result<Option<Value>, InterpreterError> {
         if self.frames.is_empty() {
-            return Err(InterpreterError::RuntimeError("Attempted to call with no active call frame"));
+            panic!("Attempted to call with no active call frame");
         }
         #[cfg(feature = "debug")]
         {
@@ -159,7 +174,7 @@ impl VM {
         }
         loop {
             if self.frame().ip >= self.chunk().len() {
-                return Err(InterpreterError::RuntimeError("Reached end of chunk with no return"));
+                panic!("Reached end of chunk with no return");
             }
             #[cfg(feature = "debug")]
             {
@@ -214,7 +229,7 @@ impl VM {
                     let offset = self.read_u16();
                     let condition = match self.stack.pop() {
                         Some(x) => x,
-                        None => return Err(InterpreterError::RuntimeError("Attempted to jump with null condition")),
+                        None => panic!("Attempted to jump with null condition"),
                     };
                     match condition {
                         Value::Bool(false) => {
@@ -222,7 +237,9 @@ impl VM {
                             *ip += offset as usize;
                         },
                         Value::Bool(true) => (),
-                        _ => return Err(InterpreterError::RuntimeError("Expected boolean in condition")),
+                        x => return Err(self.runtime_err(
+                            format!("Expected boolean in condition, found {}", x)
+                        )),
                     }
                 },
                 OpCode::Call => {
@@ -231,7 +248,9 @@ impl VM {
                         Value::Closure(f) => self.call_function(n_args, f.clone())?,
                         Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
                         Value::Array(arr) => self.array_index(n_args, &arr.clone())?,
-                        _ => return Err(InterpreterError::RuntimeError("Attempted to call non-function")),
+                        x => return Err(self.runtime_err(
+                            format!("Attempted to call non-function {}", x)
+                        )),
                     };
                 },
                 OpCode::Array => {
@@ -258,7 +277,7 @@ impl VM {
                     };
                     let value = match self.stack.last() {
                         Some(x) => x.clone(),
-                        None => return Err(InterpreterError::RuntimeError("Attempted to set null global")),
+                        None => panic!("Attempted to set global with empty stack"),
                     };
                     self.globals.insert(name.as_ref().clone(), value);
                 },
@@ -269,14 +288,16 @@ impl VM {
                     };
                     match self.globals.get(name.as_ref()) {
                         Some(x) => self.stack.push(x.clone()),
-                        None => return Err(InterpreterError::RuntimeError("Variable is undefined")),
+                        None => return Err(self.runtime_err(
+                            format!("Could not find global variable with name {}", name)
+                        )),
                     };
                 }
                 OpCode::SetLocal => {
                     let value = self.stack.last();
                     match value {
                         Some(x) => self.stack.push(x.clone()),
-                        None => return Err(InterpreterError::RuntimeError("Attempted to set null variable")),
+                        None => panic!("Attempted to set local with empty stack"),
                     }
                 },
                 OpCode::GetLocal => {

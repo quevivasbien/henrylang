@@ -110,8 +110,6 @@ impl Chunk {
             Value::Closure(func) => func.clone(),
             _ => return Err("Value is not a closure"),
         };
-        println!("Writing closure: {:?}", value);
-        println!("Upvalues: {:?}", upvalues);
         let idx = self.create_constant(value)?;
         self.write_opcode(OpCode::Closure, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
@@ -196,7 +194,7 @@ impl Chunk {
     }
 
     // figures out line number for a given byte index
-    pub fn _line_num(&self, index: usize) -> usize {
+    pub fn line_num(&self, index: usize) -> usize {
         let mut line_count = 1;
         for &i in self.newlines.iter() {
             if i > index {
