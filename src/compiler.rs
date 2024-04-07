@@ -1,11 +1,10 @@
 use std::ptr::null_mut;
-use std::{collections::HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use lazy_static::lazy_static;
 
-use crate::values::Upvalue;
-use crate::{scan, Chunk, Function, OpCode, Token, TokenType, Value};
+use crate::{scan, Chunk, Closure, Function, OpCode, Token, TokenType, Value};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -222,10 +221,18 @@ impl LocalData {
     }
 }
 
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub struct Upvalue {
+    pub index: u16,
+    pub is_local: bool,
+}
+
 struct Compiler {
     tokens: Rc<Vec<Token>>,
     function: Function,
     locals: LocalData,
+    upvalues: Vec<Upvalue>,
     current: usize,
     previous: usize,
     had_error: bool,
@@ -242,6 +249,7 @@ impl Compiler {
             tokens,
             function: Function::default(),
             locals: LocalData::default(),
+            upvalues: Vec::new(),
             current,
             previous: current,
             had_error: false,
@@ -302,21 +310,6 @@ impl Compiler {
         }
         self.error(self.current, Some(message));
     }
-    // fn is_declaration(&self) -> bool {
-    //     if self.current_token().ttype != TokenType::Ident {
-    //         return false;
-    //     }
-    //     let next_token = self.next_token();
-    //     if let Some(next_token) = next_token {
-    //         if next_token.ttype != TokenType::Assign {
-    //             return false;
-    //         }
-    //     }
-    //     else {
-    //         return false;
-    //     }
-    //     true
-    // }
     fn is_eof(&self) -> bool {
         self.current_token().ttype == TokenType::EoF
     }
@@ -333,9 +326,10 @@ impl Compiler {
         let line = self.previous_token().line;
         self.chunk().write_constant(value, line)
     }
-    fn write_closure(&mut self, value: Value) -> Result<(), &'static str> {
+    fn write_closure(&mut self, value: Value, upvalues: Vec<Upvalue>) -> Result<(), &'static str> {
         let line = self.previous_token().line;
-        self.chunk().write_closure(value, line)
+        // let upvalues = self.upvalues.clone();
+        self.chunk().write_closure(value, upvalues, line)
     }
     fn write_call(&mut self, arg_count: u8) -> Result<(), &'static str> {
         let line = self.previous_token().line;
@@ -432,19 +426,20 @@ impl Compiler {
     }
 
     fn add_upvalue(&mut self, index: u16, is_local: bool) -> u16 {
-        let uv = Upvalue { index, is_local, value: null_mut() };
+        let uv = Upvalue { index, is_local };
         // check if this upvalue already exists
-        for (i, upvalue) in self.function.upvalues.iter().enumerate() {
+        for (i, upvalue) in self.upvalues.iter().enumerate() {
             if *upvalue == uv {
                 return i as u16;
             }
         }
-        if self.function.upvalues.len() == u16::MAX as usize {
+        if self.upvalues.len() == u16::MAX as usize {
             self.error(self.previous, Some("Too many upvalues in one function"));
             return 0;
         }
-        self.function.upvalues.push(uv);
-        (self.function.upvalues.len() - 1) as u16
+        self.upvalues.push(uv);
+        self.function.num_upvalues += 1;
+        (self.upvalues.len() - 1) as u16
     }
 
     fn resolve_upvalue(&mut self, name: &String) -> Option<u16> {
@@ -550,14 +545,15 @@ impl Compiler {
         compiler.consume(TokenType::LBrace, "Expected '{' before function body");
         compiler.block();
         compiler.write_opcode(OpCode::Return);
-        compiler.end_scope();
+        // compiler.end_scope();
 
         self.current = compiler.current;
         self.previous = compiler.previous;
         if compiler.had_error {
             self.had_error = true;
         }
-        if let Err(e) = self.write_closure(Value::Function(Rc::new(compiler.function))) {
+        let closure = Box::new(Closure::new(Rc::new(compiler.function)));
+        if let Err(e) = self.write_closure(Value::Closure(closure), compiler.upvalues) {
             self.error(self.previous, Some(e));
         }
     }

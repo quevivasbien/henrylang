@@ -4,28 +4,40 @@ use std::rc::Rc;
 
 use crate::{vm::{InterpreterError, VM}, Chunk};
 
-#[derive(PartialEq, Clone, Copy)]
-pub struct Upvalue {
-    pub index: u16,
-    pub is_local: bool,
-    pub value: *const Value,
-}
-
 pub struct Function {
+    pub num_upvalues: u16,
     pub arity: u8,
     pub chunk: Chunk,
-    pub upvalues: Vec<Upvalue>,
-}
-
-impl Debug for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}]{{{}}}", self.arity, self.chunk.len())
-    }
 }
 
 impl Default for Function {
     fn default() -> Self {
-        Self { arity: 0, chunk: Chunk::new(), upvalues: Vec::new() }
+        Self { num_upvalues: 0, arity: 0, chunk: Chunk::new() }
+    }
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]({}){{{}}}", self.num_upvalues, self.arity, self.chunk.len())
+    }
+}
+
+#[derive(Clone)]
+pub struct Closure {
+    pub function: Rc<Function>,
+    pub upvalues: Vec<Value>,
+}
+
+impl Debug for Closure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "up{:?}fn{:?}", self.upvalues, self.function)
+    }
+}
+
+impl Closure {
+    pub fn new(function: Rc<Function>) -> Self {
+        let upvalues = Vec::with_capacity(function.num_upvalues as usize);
+        Self { function, upvalues }
     }
 }
 
@@ -49,7 +61,7 @@ pub enum Value {
     Bool(bool),
     String(Rc<String>),
     Array(Rc<Vec<Value>>),
-    Function(Rc<Function>),
+    Closure(Box<Closure>),
     NativeFunction(&'static NativeFunction),
     // Object(Rc<dyn Object>),
 }
@@ -61,7 +73,7 @@ impl Display for Value {
             Value::Int(x) => write!(f, "{}", x),
             Value::Bool(x) => write!(f, "{}", x),
             Value::String(x) => write!(f, "{}", x),
-            Value::Function(x) => write!(f, "{:?}", x),
+            Value::Closure(x) => write!(f, "{:?}", x),
             Value::NativeFunction(x) => write!(f, "{:?}", x),
             Value::Array(x) => {    
                 write!(f, "[")?;
@@ -92,7 +104,7 @@ impl Add<Value> for Value {
                 v.append(&mut y.as_ref().clone());
                 Rc::new(v)
             })),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot add functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot add functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot add functions"),
             _ => Err("Cannot add values of different types"),
         }
@@ -108,7 +120,7 @@ impl Sub<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot subtract booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot subtract strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot subtract arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot subtract functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot subtract functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot subtract functions"),
             _ => Err("Cannot subtract values of different types"),
         }
@@ -124,7 +136,7 @@ impl Mul<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot multiply booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot multiply strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot multiply arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot multiply functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot multiply functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot multiply functions"),
             _ => Err("Cannot multiply values of different types"),
         }
@@ -140,7 +152,7 @@ impl Div<Value> for Value {
             (Value::Bool(_x), Value::Bool(_y)) => Err("Cannot divide booleans"),
             (Value::String(_x), Value::String(_y)) => Err("Cannot divide strings"),
             (Value::Array(_x), Value::Array(_y)) => Err("Cannot divide arrays"),
-            (Value::Function(_x), Value::Function(_y)) => Err("Cannot divide functions"),
+            (Value::Closure(_x), Value::Closure(_y)) => Err("Cannot divide functions"),
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot divide functions"),
             _ => Err("Cannot divide values of different types"),
         }

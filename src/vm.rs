@@ -3,7 +3,7 @@ use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 use std::rc::Rc;
 
 use crate::chunk::Chunk;
-use crate::{Function, NativeFunction, OpCode, Value, builtins, compile};
+use crate::{Closure, Function, NativeFunction, OpCode, Value, builtins, compile};
 
 #[derive(Debug)]
 pub enum InterpreterError {
@@ -15,20 +15,18 @@ pub fn runtime_err(e: &'static str) -> InterpreterError {
     InterpreterError::RuntimeError(e)
 }
 
-#[derive(Debug)]
 pub struct CallFrame {
-    function: Rc<Function>,
+    closure: Box<Closure>,
     ip: usize,
     stack_idx: usize,
 }
 
 impl CallFrame {
-    fn new(function: Rc<Function>, stack_idx: usize) -> Self {
-        Self { function, ip: 0, stack_idx }
+    fn new(closure: Box<Closure>, stack_idx: usize) -> Self {
+        Self { closure, ip: 0, stack_idx }
     }
 }
 
-#[derive(Debug)]
 pub struct VM {
     pub stack: Vec<Value>,
     pub globals: HashMap<String, Value>,
@@ -47,9 +45,10 @@ impl VM {
     }
 
     fn init(&mut self, function: Rc<Function>) {
-        let frame = CallFrame::new(function.clone(), 0);
-        self.stack.push(Value::Function(function));
+        let closure = Box::new(Closure::new(function));
+        let frame = CallFrame::new(closure.clone(), 0);
         self.frames.push(frame);
+        self.stack.push(Value::Closure(closure));
     }
 
     fn frame(&self) -> &CallFrame {
@@ -76,7 +75,7 @@ impl VM {
     }
 
     pub fn chunk(&self) -> &Chunk {
-        &self.frames.last().unwrap().function.chunk
+        &self.frames.last().unwrap().closure.function.chunk
     }
 
     fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
@@ -99,11 +98,11 @@ impl VM {
         }
     }
 
-    pub fn call_function(&mut self, n_args: u8, function: Rc<Function>) -> Result<(), InterpreterError> {
-        if n_args != function.arity {
+    pub fn call_function(&mut self, n_args: u8, closure: Box<Closure>) -> Result<(), InterpreterError> {
+        if n_args != closure.function.arity {
             return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
         }
-        let new_frame = CallFrame::new(function, self.stack.len() - n_args as usize - 1);
+        let new_frame = CallFrame::new(closure, self.stack.len() - n_args as usize - 1);
         self.frames.push(new_frame);
         let result = match self.call()? {
             Some(x) => x,
@@ -154,7 +153,7 @@ impl VM {
         }
         #[cfg(feature = "debug")]
         {
-            println!("==call {:?}==", self.frame().function);
+            println!("==call {:?}==", self.frame().closure);
             self.chunk().disassemble();
             println!("");
         }
@@ -175,6 +174,7 @@ impl VM {
                 OpCode::Return => {
                     // pop function
                     self.stack.pop();
+                    self.frames.pop();
                     return Ok(self.last_value.clone());
                 },
                 OpCode::True => self.stack.push(Value::Bool(true)),
@@ -228,7 +228,7 @@ impl VM {
                 OpCode::Call => {
                     let n_args = self.read_u8();
                     match &self.stack[self.stack.len()-n_args as usize-1] {
-                        Value::Function(f) => self.call_function(n_args, f.clone())?,
+                        Value::Closure(f) => self.call_function(n_args, f.clone())?,
                         Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
                         Value::Array(arr) => self.array_index(n_args, &arr.clone())?,
                         _ => return Err(InterpreterError::RuntimeError("Attempted to call non-function")),
@@ -285,24 +285,26 @@ impl VM {
                     self.stack.push(value);
                 },
                 OpCode::Closure => {
-                    let function = match self.read_constant() {
-                        Value::Function(f) => f.clone(),
+                    let mut closure = match self.read_constant() {
+                        Value::Closure(c) => c.clone(),
                         _ => unreachable!("Closure was not a function"),
                     };
-                    self.stack.push(Value::Function(function.clone()));
-                    for uv in function.upvalues.iter() {
+                    for _ in 0..closure.function.num_upvalues {
                         let is_local = self.read_u8() == 1;
                         let index = self.read_u16();
-                        // if is_local {
-                        //     let value = self.stack[self.frame().stack_idx + index as usize].clone();
-                        // }
+                        closure.upvalues.push(if is_local {
+                            self.stack[self.frame().stack_idx + index as usize].clone()
+                        }
+                        else {
+                            self.frame().closure.upvalues[index as usize].clone()
+                        });
                     }
-                }
-                // OpCode::SetUpvalue => {
-                    
-                // },
+                    self.stack.push(Value::Closure(closure));
+                },
                 OpCode::GetUpvalue => {
-                    todo!()
+                    let idx = self.read_u16();
+                    let value = self.frame().closure.upvalues[idx as usize].clone();
+                    self.stack.push(value);
                 },
             }
         }
@@ -311,7 +313,12 @@ impl VM {
     pub fn interpret(&mut self, source: String) -> Result<Option<Value>, InterpreterError> {
         let function = Rc::new(compile(source).map_err(|_| InterpreterError::CompileError)?);
         self.init(function);
-        self.call()
+        self.call().map_err(|e| {
+            // in case of error, clean up before returning
+            self.stack.pop();
+            self.frames.pop();
+            e
+        })
     }
 }
 

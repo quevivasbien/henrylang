@@ -11,7 +11,7 @@ use chunk::{Chunk, OpCode};
 use compiler::compile;
 use scanner::scan;
 use token::{TokenType, Token};
-use values::{Function, NativeFunction};
+use values::{Closure, Function, NativeFunction};
 
 pub use values::Value;
 pub use vm::VM;

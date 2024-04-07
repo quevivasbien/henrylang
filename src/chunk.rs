@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
+use crate::compiler;
 use crate::Value;
 
 #[derive(Debug)]
@@ -104,15 +105,17 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
-    pub fn write_closure(&mut self, value: Value, line: usize) -> Result<(), &'static str> {
-        let func = match &value {
-            Value::Function(func) => func.clone(),
-            _ => return Err("Value is not a function"),
+    pub fn write_closure(&mut self, value: Value, upvalues: Vec<compiler::Upvalue>, line: usize) -> Result<(), &'static str> {
+        match &value {
+            Value::Closure(func) => func.clone(),
+            _ => return Err("Value is not a closure"),
         };
+        println!("Writing closure: {:?}", value);
+        println!("Upvalues: {:?}", upvalues);
         let idx = self.create_constant(value)?;
         self.write_opcode(OpCode::Closure, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
-        for upvalue in func.upvalues.iter() {
+        for upvalue in upvalues.iter() {
             self.bytes.write_u8(
                 if upvalue.is_local { 1 } else { 0 }
             ).map_err(|_| "Failed to write upvalue locality to bytes")?;
@@ -313,11 +316,11 @@ impl Chunk {
             },
             OpCode::Closure => {
                 println!("{:04} CLOSURE", ip0);
-                let func = match self.read_constant(ip) {
-                    Value::Function(f) => f,
+                let closure = match self.read_constant(ip) {
+                    Value::Closure(f) => f,
                     _ => unreachable!(),
                 };
-                for _ in 0..func.upvalues.len() {
+                for _ in 0..closure.function.num_upvalues {
                     let is_local = self.read_u8(ip) == 1;
                     let index = self.read_u16(ip);
                     println!("{:04} | UPVALUE {} {}", *ip - 2, is_local, index);
