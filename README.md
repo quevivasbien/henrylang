@@ -1,11 +1,12 @@
 # henrylang
 
-`henry` is a language designed for lobsters. It is a primarily functional language inspired by Julia, Rust, and Haskell, best-suited for mathematical computation.
+`henry` is a language designed for lobsters. It is a functional language inspired by Julia, Rust, and Haskell. It is intended mostly for mathematical computation.
 
 ## Features
 
 - All variables are immutable.
 - Everything is an expression.
+- Functions are first-class.
 
 ## Usage examples
 

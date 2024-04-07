@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 use std::rc::Rc;
 
+use crate::chunk::Chunk;
 use crate::{Function, NativeFunction, OpCode, Value, builtins, compile};
 
 #[derive(Debug)]
@@ -15,7 +16,7 @@ pub fn runtime_err(e: &'static str) -> InterpreterError {
 }
 
 #[derive(Debug)]
-struct CallFrame {
+pub struct CallFrame {
     function: Rc<Function>,
     ip: usize,
     stack_idx: usize,
@@ -32,6 +33,7 @@ pub struct VM {
     pub stack: Vec<Value>,
     pub globals: HashMap<String, Value>,
     pub last_value: Option<Value>,
+    pub frames: Vec<CallFrame>,
 }
 
 impl VM {
@@ -39,8 +41,42 @@ impl VM {
         Self {
             stack: Vec::new(),
             globals: builtins(),
-            last_value: None
+            last_value: None,
+            frames: Vec::new(),
         }
+    }
+
+    fn init(&mut self, function: Rc<Function>) {
+        let frame = CallFrame::new(function.clone(), 0);
+        self.stack.push(Value::Function(function));
+        self.frames.push(frame);
+    }
+
+    fn frame(&self) -> &CallFrame {
+        self.frames.last().unwrap()
+    }
+    fn frame_mut(&mut self) -> &mut CallFrame {
+        self.frames.last_mut().unwrap()
+    }
+    fn frame_ptr(&mut self) -> *mut CallFrame {
+        self.frames.last_mut().unwrap()
+    }
+
+    fn read_u8(&mut self) -> u8 {
+        let ip = unsafe { &mut (*self.frame_ptr()).ip };
+        self.chunk().read_u8(ip)
+    }
+    fn read_u16(&mut self) -> u16 {
+        let ip = unsafe { &mut (*self.frame_ptr()).ip };
+        self.chunk().read_u16(ip)
+    }
+    fn read_constant(&mut self) -> &Value {
+        let ip = unsafe { &mut (*self.frame_ptr()).ip };
+        self.chunk().read_constant(ip)
+    }
+
+    pub fn chunk(&self) -> &Chunk {
+        &self.frames.last().unwrap().function.chunk
     }
 
     fn binary_op(&mut self, op: fn(Value, Value) -> Result<Value, &'static str>) -> Result<(), InterpreterError> {
@@ -68,7 +104,8 @@ impl VM {
             return Err(InterpreterError::RuntimeError("Incorrect number of arguments"));
         }
         let new_frame = CallFrame::new(function, self.stack.len() - n_args as usize - 1);
-        let result = match self.call(new_frame)? {
+        self.frames.push(new_frame);
+        let result = match self.call()? {
             Some(x) => x,
             None => Value::Bool(false),
         };
@@ -111,27 +148,29 @@ impl VM {
         Ok(())
     }
 
-    fn call(&mut self, mut frame: CallFrame) -> Result<Option<Value>, InterpreterError> {
-        let chunk = &frame.function.chunk;
+    fn call(&mut self) -> Result<Option<Value>, InterpreterError> {
+        if self.frames.is_empty() {
+            return Err(InterpreterError::RuntimeError("Attempted to call with no active call frame"));
+        }
         #[cfg(feature = "debug")]
         {
-            println!("==call {:?}==", frame.function);
-            chunk.disassemble();
+            println!("==call {:?}==", self.frame().function);
+            self.chunk().disassemble();
             println!("");
         }
         loop {
-            if frame.ip >= chunk.len() {
+            if self.frame().ip >= self.chunk().len() {
                 return Err(InterpreterError::RuntimeError("Reached end of chunk with no return"));
             }
             #[cfg(feature = "debug")]
             {
-                print!("stack: {:?}, ", &self.stack[frame.stack_idx..]);
+                print!("stack: {:?}, ", &self.stack[self.frame().stack_idx..]);
                 // print!("globals: {:?}, ", self.globals);
                 println!("last_value: {:?}", self.last_value);
-                let mut ip_copy = frame.ip;
-                chunk.disassemble_instruction(&mut ip_copy);
+                let mut ip_copy = self.frame().ip;
+                self.chunk().disassemble_instruction(&mut ip_copy);
             }
-            let opcode = OpCode::from(chunk.read_u8(&mut frame.ip));
+            let opcode = OpCode::from(self.read_u8());
             match opcode {
                 OpCode::Return => {
                     // pop function
@@ -159,7 +198,7 @@ impl VM {
                     self.last_value = self.stack.pop();
                 },
                 OpCode::EndBlock => {
-                    let n_pops = chunk.read_u16(&mut frame.ip);
+                    let n_pops = self.read_u16();
                     self.stack.truncate(self.stack.len() - n_pops as usize);
                     self.stack.push(match &self.last_value {
                         Some(x) => x.clone(),
@@ -167,25 +206,27 @@ impl VM {
                     });
                 },
                 OpCode::Jump => {
-                    let offset = chunk.read_u16(&mut frame.ip);
-                    frame.ip += offset as usize;
+                    let offset = self.read_u16();
+                    let ip = &mut self.frame_mut().ip;
+                    *ip += offset as usize;
                 },
                 OpCode::JumpIfFalse => {
-                    let offset = chunk.read_u16(&mut frame.ip);
+                    let offset = self.read_u16();
                     let condition = match self.stack.pop() {
                         Some(x) => x,
                         None => return Err(InterpreterError::RuntimeError("Attempted to jump with null condition")),
                     };
                     match condition {
                         Value::Bool(false) => {
-                            frame.ip += offset as usize;
+                            let ip = &mut self.frame_mut().ip;
+                            *ip += offset as usize;
                         },
                         Value::Bool(true) => (),
                         _ => return Err(InterpreterError::RuntimeError("Expected boolean in condition")),
                     }
                 },
                 OpCode::Call => {
-                    let n_args = chunk.read_u8(&mut frame.ip);
+                    let n_args = self.read_u8();
                     match &self.stack[self.stack.len()-n_args as usize-1] {
                         Value::Function(f) => self.call_function(n_args, f.clone())?,
                         Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
@@ -194,7 +235,7 @@ impl VM {
                     };
                 },
                 OpCode::Array => {
-                    let n_elems = chunk.read_u16(&mut frame.ip);
+                    let n_elems = self.read_u16();
                     let array = Rc::new(
                         self.stack.split_off(self.stack.len() - n_elems as usize)
                     );
@@ -206,11 +247,11 @@ impl VM {
                     self.stack.push(result);
                 },
                 OpCode::Constant => {
-                    let constant = chunk.read_constant(&mut frame.ip);
-                    self.stack.push(constant.clone());
+                    let constant = self.read_constant().clone();
+                    self.stack.push(constant);
                 },
                 OpCode::SetGlobal => {
-                    let name = chunk.read_constant(&mut frame.ip);
+                    let name = self.read_constant();
                     let name = match name.clone() {
                         Value::String(name) => name,
                         _ => unreachable!("Global name was not a string"),
@@ -222,8 +263,8 @@ impl VM {
                     self.globals.insert(name.as_ref().clone(), value);
                 },
                 OpCode::GetGlobal => {
-                    let name = match &chunk.read_constant(&mut frame.ip) {
-                        Value::String(name) => name,
+                    let name = match self.read_constant() {
+                        Value::String(name) => name.clone(),
                         _ => unreachable!("Global name was not a string"),
                     };
                     match self.globals.get(name.as_ref()) {
@@ -239,19 +280,38 @@ impl VM {
                     }
                 },
                 OpCode::GetLocal => {
-                    let idx = chunk.read_u16(&mut frame.ip);
-                    let value = self.stack[frame.stack_idx + idx as usize].clone();
+                    let idx = self.read_u16();
+                    let value = self.stack[self.frame().stack_idx + idx as usize].clone();
                     self.stack.push(value);
+                },
+                OpCode::Closure => {
+                    let function = match self.read_constant() {
+                        Value::Function(f) => f.clone(),
+                        _ => unreachable!("Closure was not a function"),
+                    };
+                    self.stack.push(Value::Function(function.clone()));
+                    for uv in function.upvalues.iter() {
+                        let is_local = self.read_u8() == 1;
+                        let index = self.read_u16();
+                        // if is_local {
+                        //     let value = self.stack[self.frame().stack_idx + index as usize].clone();
+                        // }
+                    }
                 }
+                // OpCode::SetUpvalue => {
+                    
+                // },
+                OpCode::GetUpvalue => {
+                    todo!()
+                },
             }
         }
     }
 
     pub fn interpret(&mut self, source: String) -> Result<Option<Value>, InterpreterError> {
         let function = Rc::new(compile(source).map_err(|_| InterpreterError::CompileError)?);
-        self.stack.push(Value::Function(function.clone()));
-        let frame = CallFrame::new(function, 0);
-
-        self.call(frame)
+        self.init(function);
+        self.call()
     }
 }
+

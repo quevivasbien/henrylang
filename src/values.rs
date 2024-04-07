@@ -2,65 +2,19 @@ use std::{fmt::{Debug, Display}, ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, S
 use std::rc::Rc;
 // use downcast_rs::{impl_downcast, DowncastSync};
 
-use crate::{vm::InterpreterError, Chunk, VM};
+use crate::{vm::{InterpreterError, VM}, Chunk};
 
-// #[derive(Debug, PartialEq)]
-// pub enum ObjectType {
-//     String
-// }
-
-// pub trait Object: DowncastSync {
-//     fn get_type(&self) -> ObjectType;
-//     fn string(&self) -> String {
-//         format!("{:?}", self.get_type())
-//     }
-// }
-// impl_downcast!(sync Object);
-
-// impl Debug for dyn Object {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self.string())
-//     }
-// }
-
-// pub struct ObjectString {
-//     pub value: String
-// }
-
-// impl Object for ObjectString {
-//     fn get_type(&self) -> ObjectType {
-//         ObjectType::String
-//     }
-//     fn string(&self) -> String {
-//         self.value.clone()
-//     }
-// }
-
-// impl ObjectString {
-//     pub fn new(value: String) -> Self {
-//         Self { value }
-//     }
-// }
-
-// fn add_objects(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-//     match (x.get_type(), y.get_type()) {
-//         (ObjectType::String, ObjectType::String) => Ok(Value::Object(
-//             Rc::new(ObjectString { value: format!("{}{}", x.string(), y.string()) })
-//         )),
-//         _ => Err("Add not implemented for this object type"),
-//     }
-// }
-
-// fn objects_eq(x: &dyn Object, y: &dyn Object) -> Result<Value, &'static str> {
-//     match (x.get_type(), y.get_type()) {
-//         (ObjectType::String, ObjectType::String) => Ok(Value::Bool(x.string() == y.string())),
-//         _ => Err("Equality comparison not implemented for this object type"),
-//     }
-// }
+#[derive(PartialEq, Clone, Copy)]
+pub struct Upvalue {
+    pub index: u16,
+    pub is_local: bool,
+    pub value: *const Value,
+}
 
 pub struct Function {
     pub arity: u8,
     pub chunk: Chunk,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl Debug for Function {
@@ -71,7 +25,7 @@ impl Debug for Function {
 
 impl Default for Function {
     fn default() -> Self {
-        Self { arity: 0, chunk: Chunk::new() }
+        Self { arity: 0, chunk: Chunk::new(), upvalues: Vec::new() }
     }
 }
 

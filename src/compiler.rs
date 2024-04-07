@@ -1,8 +1,10 @@
-use std::collections::HashMap;
+use std::ptr::null_mut;
+use std::{collections::HashMap};
 use std::rc::Rc;
 
 use lazy_static::lazy_static;
 
+use crate::values::Upvalue;
 use crate::{scan, Chunk, Function, OpCode, Token, TokenType, Value};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
@@ -228,10 +230,14 @@ struct Compiler {
     previous: usize,
     had_error: bool,
     panic_mode: bool,
+    // parent is stored as a pointer rather than a reference
+    // this is a bit non-rusty, but I do it here because it makes
+    // the impl of the RULES map much easier since no lifetimes are involved
+    parent: *mut Compiler,
 }
 
 impl Compiler {
-    fn new(tokens: Rc<Vec<Token>>, current: usize) -> Self {
+    fn new(tokens: Rc<Vec<Token>>, current: usize, parent: *mut Compiler) -> Self {
         Self {
             tokens,
             function: Function::default(),
@@ -240,6 +246,7 @@ impl Compiler {
             previous: current,
             had_error: false,
             panic_mode: false,
+            parent,
         }
     }
     fn previous_token(&self) -> &Token {
@@ -313,9 +320,11 @@ impl Compiler {
     fn is_eof(&self) -> bool {
         self.current_token().ttype == TokenType::EoF
     }
+    
     fn chunk(&mut self) -> &mut Chunk {
         &mut self.function.chunk
     }
+
     fn write_opcode(&mut self, opcode: OpCode) {
         let line = self.previous_token().line;
         self.chunk().write_opcode(opcode, line);
@@ -323,6 +332,10 @@ impl Compiler {
     fn write_constant(&mut self, value: Value) -> Result<(), &'static str> {
         let line = self.previous_token().line;
         self.chunk().write_constant(value, line)
+    }
+    fn write_closure(&mut self, value: Value) -> Result<(), &'static str> {
+        let line = self.previous_token().line;
+        self.chunk().write_closure(value, line)
     }
     fn write_call(&mut self, arg_count: u8) -> Result<(), &'static str> {
         let line = self.previous_token().line;
@@ -396,7 +409,8 @@ impl Compiler {
             name,
             depth: self.locals.scope_depth,
         };
-        if let Err(e) = self.locals.push(local) {
+        let maybe_err = self.locals.push(local);
+        if let Err(e) = maybe_err {
             self.error(self.previous, Some(e));
         }
         None
@@ -415,6 +429,43 @@ impl Compiler {
             },
             None => self.write_opcode(OpCode::SetLocal),
         }
+    }
+
+    fn add_upvalue(&mut self, index: u16, is_local: bool) -> u16 {
+        let uv = Upvalue { index, is_local, value: null_mut() };
+        // check if this upvalue already exists
+        for (i, upvalue) in self.function.upvalues.iter().enumerate() {
+            if *upvalue == uv {
+                return i as u16;
+            }
+        }
+        if self.function.upvalues.len() == u16::MAX as usize {
+            self.error(self.previous, Some("Too many upvalues in one function"));
+            return 0;
+        }
+        self.function.upvalues.push(uv);
+        (self.function.upvalues.len() - 1) as u16
+    }
+
+    fn resolve_upvalue(&mut self, name: &String) -> Option<u16> {
+        if self.parent.is_null() {
+            return None;
+        }
+        let parent = unsafe {
+            &mut *self.parent
+        };
+
+        // look for upvalue as local in parent scope
+        if let Some(idx) = parent.locals.get_idx(name) {
+            return Some(self.add_upvalue(idx, true));
+        }
+
+        // look for upvalue recursively going upward in scope
+        if let Some(idx) = parent.resolve_upvalue(name) {
+            return Some(self.add_upvalue(idx, false));
+        }
+
+        None
     }
 
     fn expression(&mut self) {
@@ -477,7 +528,7 @@ impl Compiler {
     }
 
     fn fn_decl(&mut self) {
-        let mut compiler = Compiler::new(self.tokens.clone(), self.current);
+        let mut compiler = Compiler::new(self.tokens.clone(), self.current,self);
 
         compiler.begin_scope();
         while !compiler.match_token(TokenType::Pipe) && !compiler.is_eof() {
@@ -506,7 +557,7 @@ impl Compiler {
         if compiler.had_error {
             self.had_error = true;
         }
-        if let Err(e) = self.write_constant(Value::Function(Rc::new(compiler.function))) {
+        if let Err(e) = self.write_closure(Value::Function(Rc::new(compiler.function))) {
             self.error(self.previous, Some(e));
         }
     }
@@ -554,7 +605,7 @@ impl Compiler {
     }
 
     fn variable(&mut self) {
-        let name = &self.previous_token().text;
+        let name = self.previous_token().text.clone();
         // check whether this is an assignment
         if self.current_token().ttype == TokenType::Assign {
             self.var_declaration(name.clone());
@@ -562,12 +613,15 @@ impl Compiler {
         }
         // proceed with the assumption that the variable has already been defined
         let line = self.previous_token().line;
-        let res = match self.locals.get_idx(&name) {
-            Some(idx) => self.chunk().write_get_local(idx, line),
-            None => {
-                let name = name.clone();
-                self.chunk().write_get_global(name, line)
-            },
+        let local_idx = self.locals.get_idx(&name);
+        let res = if let Some(idx) = local_idx {
+            self.chunk().write_get_local(idx, line)
+        }
+        else if let Some(idx) = self.resolve_upvalue(&name) {
+            self.chunk().write_get_upvalue(idx, line)
+        }
+        else {
+            self.chunk().write_get_global(name, line)
         };
         if let Err(e) = res {
             self.error(self.previous, Some(e));
@@ -642,7 +696,7 @@ impl Compiler {
 
 pub fn compile(source: String) -> Result<Function, ()> {
     let tokens = Rc::new(scan(source));
-    let mut compiler = Compiler::new(tokens, 0);
+    let mut compiler = Compiler::new(tokens, 0, null_mut());
     compiler.parse();
 
     if compiler.had_error {
