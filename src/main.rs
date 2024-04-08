@@ -17,7 +17,7 @@ fn repl(vm: &mut VM) {
         match vm.interpret(user_input) {
             Ok(Some(x)) => println!("{}", x),
             Ok(None) => (),
-            Err(e) => println!("{:?}", e),
+            Err(e) => println!("{}", e),
         }
     }
 }
@@ -34,7 +34,7 @@ fn run_file(vm: &mut VM, path: &str) {
     match vm.interpret(contents) {
         Ok(Some(x)) => println!("{}", x),
         Ok(None) => (),
-        Err(e) => println!("{:?}", e),
+        Err(e) => println!("{}", e),
     }
 }
 

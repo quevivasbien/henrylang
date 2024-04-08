@@ -47,7 +47,6 @@ pub enum OpCode {
     SetLocal,
     GetLocal,
     Closure,
-    // SetUpvalue,
     GetUpvalue,
 }
 

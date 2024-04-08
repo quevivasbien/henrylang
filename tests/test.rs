@@ -90,6 +90,27 @@ fn test_closure() {
 }
 
 #[test]
+fn test_object() {
+    let source = "
+    myobj := type {
+        a
+        b
+        c
+    }
+    x := myobj(1, 2, 3)
+    y := myobj(-1, -2, -3)
+    
+    zipped := zip(array(x), array(y))
+    added := sum(|x| { sum(x) } -> zipped)
+    
+    added = 0 and x != y and x.b = -y(1)
+    ";
+
+    let result = run_expect_value!(source, Bool);
+    assert!(result);
+}
+
+#[test]
 fn test_builtins() {
     let result = run_expect_value!("sum(0 to 4)", Int);
     assert_eq!(result, 10);

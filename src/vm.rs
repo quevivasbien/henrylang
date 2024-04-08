@@ -3,12 +3,22 @@ use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 use std::rc::Rc;
 
 use crate::chunk::Chunk;
+use crate::values::{Object, TypeDef};
 use crate::{Closure, Function, NativeFunction, OpCode, Value, builtins, compile};
 
 #[derive(Debug)]
 pub enum InterpreterError {
     CompileError,
     RuntimeError(String),
+}
+
+impl std::fmt::Display for InterpreterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InterpreterError::CompileError => write!(f, "Compile error"),
+            InterpreterError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
+        }
+    }
 }
 
 pub struct CallFrame {
@@ -75,9 +85,10 @@ impl VM {
     }
 
     pub fn runtime_err(&self, e: String) -> InterpreterError {
-        // print stack trace
+        // print track
+        println!("Function call trace:");
         for frame in self.frames.iter() {
-            println!("On line {} of {:?}", frame.closure.function.chunk.line_num(frame.ip), frame.closure.function);
+            println!(" | Line {}, in {}...", frame.closure.function.chunk.line_num(frame.ip), frame.closure.function);
         }
         // return error
         InterpreterError::RuntimeError(e.to_string())
@@ -156,6 +167,59 @@ impl VM {
                 format!("When accessing array, expected index to be an integer, got {}", x)
             )),
             None => panic!("Attempted to perform array access with empty stack"),
+        };
+        self.stack.pop();
+        self.stack.push(result);
+        Ok(())
+    }
+
+    pub fn create_object(&mut self, n_args: u8, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
+        if n_args != typedef.fieldnames.len() as u8 {
+            return Err(self.runtime_err(
+                format!("When creating object, expected {} field names, got {}", typedef.fieldnames.len(), n_args)
+            ));
+        }
+        let mut fields = HashMap::new();
+        for name in typedef.fieldnames.iter().cloned().rev() {
+            let value = self.stack.pop().expect("Call to create_object resulted in empty stack");
+            fields.insert(name, value);
+        }
+        self.stack.pop();
+        self.stack.push(Value::Object(Rc::new(Object::new(typedef, fields))));
+        Ok(())
+    }
+
+    pub fn get_field(&mut self, n_args: u8, obj: Rc<Object>) -> Result<(), InterpreterError> {
+        if n_args != 1 {
+            return Err(self.runtime_err(
+                format!("When accessing field, expected 1 field name, got {}", n_args)
+            ));
+        }
+        let result = match self.stack.pop() {
+            Some(Value::String(name)) => {
+                match obj.fields.get(name.as_ref()) {
+                    Some(x) => x.clone(),
+                    None => return Err(self.runtime_err(
+                        format!("Field {} not found in {}", name, obj)
+                    )),
+                }
+            },
+            Some(Value::Int(mut idx)) => {
+                if idx < 0 {
+                    idx = obj.fields.len() as i64 + idx;
+                }
+                if idx < 0 || idx >= obj.fields.len() as i64 {
+                    return Err(self.runtime_err(
+                        format!("Field index {} out of bounds for object of size {}", idx, obj.fields.len())
+                    ));
+                }
+                let fieldname = &obj.typedef.fieldnames[idx as usize];
+                obj.fields.get(fieldname).unwrap().clone()
+            },
+            Some(x) => return Err(self.runtime_err(
+                format!("When accessing field, expected field name to be a string or integer, got {}", x)
+            )),
+            None => panic!("Attempted to perform field access with empty stack"),
         };
         self.stack.pop();
         self.stack.push(result);
@@ -247,9 +311,11 @@ impl VM {
                     match &self.stack[self.stack.len()-n_args as usize-1] {
                         Value::Closure(f) => self.call_function(n_args, f.clone())?,
                         Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
-                        Value::Array(arr) => self.array_index(n_args, &arr.clone())?,
+                        Value::Array(arr) => self.array_index(n_args, arr.clone().as_ref())?,
+                        Value::TypeDef(td) => self.create_object(n_args, td.clone())?,
+                        Value::Object(obj) => self.get_field(n_args, obj.clone())?,
                         x => return Err(self.runtime_err(
-                            format!("Attempted to call non-function {}", x)
+                            format!("Attempted to call non-callable {}", x)
                         )),
                     };
                 },

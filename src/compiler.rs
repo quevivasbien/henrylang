@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use lazy_static::lazy_static;
 
-use crate::{scan, Chunk, Closure, Function, OpCode, Token, TokenType, Value};
+use crate::{scan, values::TypeDef, Chunk, Closure, Function, OpCode, Token, TokenType, Value};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -167,6 +167,14 @@ lazy_static! {
             TokenType::If,
             ParseRule::new(Some(Compiler::if_expr), None, Precedence::None),
         );
+        map.insert(
+            TokenType::Type,
+            ParseRule::new(Some(Compiler::type_decl), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Dot,
+            ParseRule::new(None, Some(Compiler::get_field), Precedence::Call),
+        );
 
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
@@ -241,6 +249,8 @@ struct Compiler {
     // this is a bit non-rusty, but I do it here because it makes
     // the impl of the RULES map much easier since no lifetimes are involved
     parent: *mut Compiler,
+    // used to assign names to functions and types without having to backtrack 
+    last_name: Option<String>,
 }
 
 impl Compiler {
@@ -255,6 +265,7 @@ impl Compiler {
             had_error: false,
             panic_mode: false,
             parent,
+            last_name: None,
         }
     }
     fn previous_token(&self) -> &Token {
@@ -411,6 +422,7 @@ impl Compiler {
     }
 
     fn var_declaration(&mut self, name: String) {
+        self.last_name = Some(name.clone());
         let idx = self.create_variable(name);
         self.consume(TokenType::Assign, "Expected ':=' after variable name.");
         self.parse_precedence(Precedence::Assignment);
@@ -422,7 +434,8 @@ impl Compiler {
                 }
             },
             None => self.write_opcode(OpCode::SetLocal),
-        }
+        };
+        self.last_name = None;
     }
 
     fn add_upvalue(&mut self, index: u16, is_local: bool) -> u16 {
@@ -524,6 +537,9 @@ impl Compiler {
 
     fn fn_decl(&mut self) {
         let mut compiler = Compiler::new(self.tokens.clone(), self.current,self);
+        if let Some(name) = &self.last_name {
+            compiler.function.name = name.clone();
+        }
 
         compiler.begin_scope();
         while !compiler.match_token(TokenType::Pipe) && !compiler.is_eof() {
@@ -554,6 +570,30 @@ impl Compiler {
         }
         let closure = Box::new(Closure::new(Rc::new(compiler.function)));
         if let Err(e) = self.write_closure(Value::Closure(closure), compiler.upvalues) {
+            self.error(self.previous, Some(e));
+        }
+    }
+
+    fn type_decl(&mut self) {
+        self.consume(TokenType::LBrace, "Expected '{' after 'type'.");
+        let name = match &self.last_name {
+            Some(name) => name.clone(),
+            None => String::new(),
+        };
+        let mut fieldnames = Vec::new();
+        while self.current_token().ttype != TokenType::RBrace && !self.is_eof() {
+            self.consume(TokenType::Ident, "Expected field name.");
+            if fieldnames.len() == u8::MAX as usize {
+                self.error(self.previous, Some("Too many type fields"));
+            }
+            fieldnames.push(self.previous_token().text.clone());
+            // comma is optional between field names
+            self.match_token(TokenType::Comma);
+        }
+        self.consume(TokenType::RBrace, "Expected '}' after type fields.");
+
+        let typedef = Rc::new(TypeDef::new(name, fieldnames));
+        if let Err(e) = self.write_constant(Value::TypeDef(typedef)) {
             self.error(self.previous, Some(e));
         }
     }
@@ -673,6 +713,17 @@ impl Compiler {
         }
     }
 
+    fn get_field(&mut self) {
+        self.consume(TokenType::Ident, "Expected field name after '.'");
+        let name = self.previous_token().text.clone();
+        if let Err(e) = self.write_constant(Value::String(Rc::new(name))) {
+            self.error(self.previous, Some(e));
+        }
+        if let Err(e) = self.write_call(1) {
+            self.error(self.previous, Some(e));
+        }
+    }
+
     fn literal(&mut self) {
         match self.previous_token().ttype {
             TokenType::True => self.write_opcode(OpCode::True),
@@ -694,6 +745,7 @@ pub fn compile(source: String) -> Result<Function, ()> {
     let tokens = Rc::new(scan(source));
     let mut compiler = Compiler::new(tokens, 0, null_mut());
     compiler.parse();
+    compiler.function.name = "main".to_string();
 
     if compiler.had_error {
         Err(())

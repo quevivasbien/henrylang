@@ -10,8 +10,16 @@ lazy_static! {
         name: "print",
         arity: 1,
         function: |_vm, args| {
-            println!("{}", args[0]);
-            Ok(Value::String(Rc::new(format!("{}", args[0]))))
+            Ok(match &args[0] {
+                Value::String(x) => {
+                    println!("{}", x);
+                    Value::String(x.clone())
+                },
+                x => {
+                    println!("{}", x);
+                    Value::String(Rc::new(format!("{}", x)))
+                }
+            })
         }
     };
 
@@ -61,13 +69,42 @@ lazy_static! {
         name: "string",
         arity: 1,
         function: |_vm, args| {
-            Ok(Value::String(match &args[0] {
-                Value::String(x) => x.clone(),
-                Value::Int(x) => Rc::new(x.to_string()),
-                Value::Float(x) => Rc::new(x.to_string()),
-                Value::Bool(x) => Rc::new(x.to_string()),
-                x => Rc::new(format!("{}", x)),
-            }))
+            Ok(match &args[0] {
+                Value::String(x) => {
+                    Value::String(x.clone())
+                },
+                x => {
+                    Value::String(Rc::new(format!("{}", x)))
+                }
+            })
+        }
+    };
+
+    static ref ARRAY: NativeFunction = NativeFunction {
+        name: "array",
+        arity: 1,
+        function: |vm, args| {
+            let result = match &args[0] {
+                Value::Array(x) => x.clone(),
+                Value::String(x) => {
+                    Rc::new(x.chars().map(
+                        |x| {
+                            Value::String(Rc::new(x.to_string()))
+                        }
+                    ).collect())
+                },
+                Value::Object(x) => {
+                    Rc::new(x.typedef.fieldnames.iter().map(
+                        |fieldname| {
+                            x.fields.get(fieldname).unwrap().clone()
+                        }
+                    ).collect())
+                },
+                x => return Err(vm.runtime_err(
+                    format!("Cannot call array on non-iterable type, got {:?}", x)
+                ))
+            };
+            Ok(Value::Array(result))
         }
     };
 
@@ -78,8 +115,9 @@ lazy_static! {
             let length = match &args[0] {
                 Value::Array(x) => x.len(),
                 Value::String(x) => x.len(),
+                Value::Object(x) => x.fields.len(),
                 x => return Err(vm.runtime_err(
-                    format!("Cannot call len on non-array or string type, got {:?}", x)
+                    format!("Cannot call len on non-iterable type, got {:?}", x)
                 )),
             };
             Ok(Value::Int(length as i64))
@@ -354,6 +392,7 @@ pub fn builtins() -> HashMap<String, Value> {
     map.insert("int".to_string(), Value::NativeFunction(&INT));
     map.insert("float".to_string(), Value::NativeFunction(&FLOAT));
     map.insert("string".to_string(), Value::NativeFunction(&STRING));
+    map.insert("array".to_string(), Value::NativeFunction(&ARRAY));
 
     map.insert("len".to_string(), Value::NativeFunction(&LEN));
     map.insert("max".to_string(), Value::NativeFunction(&MAX));
