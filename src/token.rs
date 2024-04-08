@@ -45,6 +45,7 @@ pub enum TokenType {
     True,
     False,
     To,
+    Some,
 
     Error,
     EoF,
@@ -80,6 +81,7 @@ lazy_static! {
         map.insert("true", TokenType::True);
         map.insert("false", TokenType::False);
         map.insert("to", TokenType::To);
+        map.insert("some", TokenType::Some);
 
         map
     };

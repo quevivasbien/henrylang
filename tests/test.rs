@@ -111,6 +111,23 @@ fn test_object() {
 }
 
 #[test]
+fn test_maybe() {
+    let source = "
+    null_if_negative := |x| {
+        if x > 0 {
+            x
+        }
+    }
+    
+    positives := |x| {unwrap(x, 0)} -> filter(is_some, null_if_negative -> -4 to 4)
+    len(positives) = 4 and sum(positives) = 10
+    ";
+
+    let result = run_expect_value!(source, Bool);
+    assert!(result);
+}
+
+#[test]
 fn test_builtins() {
     let result = run_expect_value!("sum(0 to 4)", Int);
     assert_eq!(result, 10);

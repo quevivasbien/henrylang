@@ -19,14 +19,14 @@ impl Default for Function {
 
 impl Debug for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}[{}]({}){{{}}}", self.name, self.num_upvalues, self.arity, self.chunk.len())
+        write!(f, "{}[{}](<{}>){{{}}}", self.name, self.num_upvalues, self.arity, self.chunk.len())
     }
 }
 
 impl Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = if self.name.is_empty() { &"<anon>" } else { self.name.as_str() };
-        write!(f, "{}({})", name, self.arity)
+        write!(f, "{}(<{}>)", name, self.arity)
     }
 }
 
@@ -159,6 +159,7 @@ pub enum Value {
     NativeFunction(&'static NativeFunction),
     TypeDef(Rc<TypeDef>),
     Object(Rc<Object>),
+    Maybe(Box<Option<Value>>),
 }
 
 impl Display for Value {
@@ -183,6 +184,14 @@ impl Display for Value {
             },
             Value::TypeDef(x) => write!(f, "{}", x),
             Value::Object(x) => write!(f, "{}", x),
+            Value::Maybe(x) => {
+                if x.is_none() {
+                    write!(f, "null")
+                }
+                else {
+                    write!(f, "some({})", x.clone().unwrap())
+                }
+            },
         }
     }
 }
@@ -204,6 +213,7 @@ impl Add<Value> for Value {
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot add functions".to_string()),
             (Value::TypeDef(_x), Value::TypeDef(_y)) => Err("Cannot add type definitions".to_string()),
             (Value::Object(_x), Value::Object(_y)) => Err("Cannot add objects".to_string()),
+            (Value::Maybe(_x), Value::Maybe(_y)) => Err("Cannot add maybe values without first unwrapping".to_string()),
             (x, y) => Err(
                 format!("Tried to add {} and {}, but addition of different types is not allowed", x, y)
             ),
@@ -224,6 +234,7 @@ impl Sub<Value> for Value {
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot subtract functions".to_string()),
             (Value::TypeDef(_x), Value::TypeDef(_y)) => Err("Cannot subtract type definitions".to_string()),
             (Value::Object(_x), Value::Object(_y)) => Err("Cannot subtract objects".to_string()),
+            (Value::Maybe(_x), Value::Maybe(_y)) => Err("Cannot subtract maybe values without first unwrapping".to_string()),
             (x, y) => Err(
                 format!("Tried to subtract {} and {}, but subtraction of different types is not allowed", x, y)
             ),
@@ -244,6 +255,7 @@ impl Mul<Value> for Value {
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot multiply functions".to_string()),
             (Value::TypeDef(_x), Value::TypeDef(_y)) => Err("Cannot multiply type definitions".to_string()),
             (Value::Object(_x), Value::Object(_y)) => Err("Cannot multiply objects".to_string()),
+            (Value::Maybe(_x), Value::Maybe(_y)) => Err("Cannot multiply maybe values without first unwrapping".to_string()),
             (x, y) => Err(
                 format!("Tried to multiply {} and {}, but multiplication of different types is not allowed", x, y)
             ),
@@ -264,6 +276,7 @@ impl Div<Value> for Value {
             (Value::NativeFunction(_x), Value::NativeFunction(_y)) => Err("Cannot divide functions".to_string()),
             (Value::TypeDef(_x), Value::TypeDef(_y)) => Err("Cannot divide type definitions".to_string()),
             (Value::Object(_x), Value::Object(_y)) => Err("Cannot divide objects".to_string()),
+            (Value::Maybe(_x), Value::Maybe(_y)) => Err("Cannot divide maybe values without first unwrapping".to_string()),
             (x, y) => Err(
                 format!("Tried to divide {} and {}, but division of different types is not allowed", x, y)
             ),
@@ -363,6 +376,12 @@ impl Value {
                 }
                 Ok(Value::Bool(true))
             },
+            (Value::Maybe(x), Value::Maybe(y)) => Ok(match (x.as_ref(), y.as_ref()) {
+                (None, None) => Value::Bool(true),
+                (None, _) => Value::Bool(false),
+                (_, None) => Value::Bool(false),
+                (Some(x), Some(y)) => x.clone().eq(y.clone())?
+            }),
             (x, y) => Err(
                 format!("Tried to check equality of {} and {}, but comparison of different types is not allowed", x, y)
             ),

@@ -48,6 +48,8 @@ pub enum OpCode {
     GetLocal,
     Closure,
     GetUpvalue,
+
+    WrapSome,
 }
 
 impl From<u8> for OpCode {
@@ -326,6 +328,9 @@ impl Chunk {
             OpCode::GetUpvalue => {
                 let idx = self.read_u16(ip);
                 println!("{:04} GETUPVALUE {}", ip0, idx);
+            },
+            OpCode::WrapSome => {
+                println!("{:04} SOME", ip0);
             },
         }
         return false

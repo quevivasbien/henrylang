@@ -117,7 +117,7 @@ impl VM {
     pub fn call_function(&mut self, n_args: u8, closure: Box<Closure>) -> Result<(), InterpreterError> {
         if n_args != closure.function.arity {
             return Err(self.runtime_err(
-                format!("Incorrect number of arguments: Expected {}, got {}.", closure.function.arity, n_args)
+                format!("Incorrect number of arguments in user-defined function `{}`: Expected {}, got {}.", closure.function, closure.function.arity, n_args)
             ));
         }
         let new_frame = CallFrame::new(closure, self.stack.len() - n_args as usize - 1);
@@ -135,7 +135,7 @@ impl VM {
     pub fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
         if n_args != function.arity {
             return Err(self.runtime_err(
-                format!("Incorrect number of arguments: Expected {}, got {}.", function.arity, n_args)
+                format!("Incorrect number of arguments in built-in function `{}`: Expected {}, got {}.", function.name, function.arity, n_args)
             ));
         }
         let args = self.stack.split_off(self.stack.len() - n_args as usize);
@@ -393,6 +393,10 @@ impl VM {
                     let value = self.frame().closure.upvalues[idx as usize].clone();
                     self.stack.push(value);
                 },
+                OpCode::WrapSome => {
+                    let value = self.stack.pop().expect("Attempted to wrap with empty stack");
+                    self.stack.push(Value::Maybe(Box::new(Some(value))));
+                },
             }
         }
     }
@@ -402,8 +406,8 @@ impl VM {
         self.init(function);
         self.call().map_err(|e| {
             // in case of error, clean up before returning
-            self.stack.pop();
-            self.frames.pop();
+            self.stack.clear();
+            self.frames.clear();
             e
         })
     }

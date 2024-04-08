@@ -23,6 +23,35 @@ lazy_static! {
         }
     };
 
+    static ref TYPEOF: NativeFunction = NativeFunction {
+        name: "typeof",
+        arity: 1,
+        function: |_vm, args| {
+            fn recurse_type(x: &Value) -> String {
+                match x {
+                    Value::Int(_) => "Int".to_string(),
+                    Value::Float(_) => "Float".to_string(),
+                    Value::String(_) => "String".to_string(),
+                    Value::Bool(_) => "Bool".to_string(),
+                    Value::Array(_) => "Array".to_string(),
+                    Value::Object(x) => {
+                        format!("Object({})", x.typedef.name)
+                    },
+                    Value::Closure(_) => "Function".to_string(),
+                    Value::NativeFunction(_) => "Function".to_string(),
+                    Value::TypeDef(_) => "TypeDef".to_string(),
+                    Value::Maybe(x) => {
+                        match x.as_ref() {
+                            Some(x) => format!("Some({})", recurse_type(x)),
+                            None => "Null".to_string(),
+                        }
+                    },
+                }
+            }
+            Ok(Value::String(Rc::new(recurse_type(&args[0]))))
+        }
+    };
+
     static ref INT: NativeFunction = NativeFunction {
         name: "int",
         arity: 1,
@@ -36,6 +65,7 @@ lazy_static! {
                 },
                 Value::Int(x) => *x,
                 Value::Float(x) => *x as i64,
+                Value::Bool(x) => *x as i64,
                 x => return Err(vm.runtime_err(
                     format!("Cannot call int on non-numeric or string type, got {:?}", x)
                 )),
@@ -105,6 +135,50 @@ lazy_static! {
                 ))
             };
             Ok(Value::Array(result))
+        }
+    };
+
+    static ref IS_NULL: NativeFunction = NativeFunction {
+        name: "is_null",
+        arity: 1,
+        function: |_vm, args| {
+            match &args[0] {
+                Value::Maybe(x) => Ok(match x.as_ref() {
+                    Some(_) => Value::Bool(false),
+                    None => Value::Bool(true),
+                }),
+                _ => Ok(Value::Bool(false)),
+            }
+        }
+    };
+
+    static ref IS_SOME: NativeFunction = NativeFunction {
+        name: "is_some",
+        arity: 1,
+        function: |_vm, args| {
+            match &args[0] {
+                Value::Maybe(x) => Ok(match x.as_ref() {
+                    Some(_) => Value::Bool(true),
+                    None => Value::Bool(false),
+                }),
+                _ => Ok(Value::Bool(true)),
+            }
+        }
+    };
+
+    static ref UNWRAP: NativeFunction = NativeFunction {
+        name: "unwrap",
+        arity: 2,
+        function: |vm, args| {
+            match &args[0] {
+                Value::Maybe(x) => Ok(match x.as_ref() {
+                    Some(x) => x.clone(),
+                    None => args[1].clone(),
+                }),
+                x => return Err(vm.runtime_err(
+                    format!("Cannot call unwrap on non-maybe type, got {:?}", x)
+                )),
+            }
         }
     };
 
@@ -389,10 +463,16 @@ lazy_static! {
 pub fn builtins() -> HashMap<String, Value> {
     let mut map = HashMap::new();
     map.insert("print".to_string(), Value::NativeFunction(&PRINT));
+
+    map.insert("typeof".to_string(), Value::NativeFunction(&TYPEOF));
     map.insert("int".to_string(), Value::NativeFunction(&INT));
     map.insert("float".to_string(), Value::NativeFunction(&FLOAT));
     map.insert("string".to_string(), Value::NativeFunction(&STRING));
     map.insert("array".to_string(), Value::NativeFunction(&ARRAY));
+
+    map.insert("is_null".to_string(), Value::NativeFunction(&IS_NULL));
+    map.insert("is_some".to_string(), Value::NativeFunction(&IS_SOME));
+    map.insert("unwrap".to_string(), Value::NativeFunction(&UNWRAP));
 
     map.insert("len".to_string(), Value::NativeFunction(&LEN));
     map.insert("max".to_string(), Value::NativeFunction(&MAX));

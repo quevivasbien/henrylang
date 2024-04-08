@@ -136,6 +136,10 @@ lazy_static! {
             ParseRule::new(None, Some(Compiler::binary), Precedence::Range),
         );
         map.insert(
+            TokenType::Some,
+            ParseRule::new(Some(Compiler::some), None, Precedence::None),
+        );
+        map.insert(
             TokenType::RightArrow,
             ParseRule::new(None, Some(Compiler::binary), Precedence::Assignment),
         );
@@ -274,12 +278,6 @@ impl Compiler {
     fn current_token(&self) -> &Token {
         &self.tokens[self.current]
     }
-    // fn next_token(&self) -> Option<&Token> {
-    //     if self.current + 1 >= self.tokens.len() {
-    //         return None;
-    //     }
-    //     Some(&self.tokens[self.current + 1])
-    // }
     fn error(&mut self, loc: usize, message: Option<&str>) {
         if self.panic_mode {
             return;
@@ -288,10 +286,10 @@ impl Compiler {
         let token = &self.tokens[loc];
         eprint!("Error on line {} ", token.line);
         if token.ttype == TokenType::EoF {
-            eprint!(" at end")
+            eprint!("at end")
         }
         else {
-            eprint!(" at '{}'", token.text)
+            eprint!("at '{}'", token.text)
         }
         let message = message.unwrap_or(token.text.as_str());
         eprintln!(": {}", message);
@@ -304,6 +302,9 @@ impl Compiler {
         }
         false
     }
+    // fn next_token_is(&self, ttype: TokenType) -> bool {
+    //     self.current + 1 < self.tokens.len() && self.tokens[self.current + 1].ttype == ttype
+    // }
     fn advance(&mut self) {
         self.previous = self.current;
         loop {
@@ -499,6 +500,15 @@ impl Compiler {
     }
 
     fn block(&mut self) {
+        // handle case of empty block
+        if self.match_token(TokenType::RBrace) {
+            // write null
+            if let Err(e) = self.write_constant(Value::Maybe(Box::new(None))) {
+                self.error(self.previous, Some(e));
+            }
+            return;
+        }
+
         self.begin_scope();
         while self.current_token().ttype != TokenType::RBrace && !self.is_eof() {
             self.expression();
@@ -510,19 +520,26 @@ impl Compiler {
     }
 
     fn if_expr(&mut self) {
+        // read condition
         self.expression();
         let line = self.previous_token().line;
         let jump_if_idx = match self.chunk().write_jump(OpCode::JumpIfFalse, line) {
             Ok(idx) => idx,
             Err(e) => return self.error(self.previous, Some(e)),
         };
+        // read expr evaluated if condition is true
         self.consume(TokenType::LBrace, "Expected '{' after 'if'.");
-        self.block();  // expr evaluated if condition is true
+        self.block();
+        // if no else block follows, wrap result of if in Some
+        if self.current_token().ttype != TokenType::Else {
+            self.write_opcode(OpCode::WrapSome);
+        }
         let line = self.previous_token().line;
         let jump_else_idx = match self.chunk().write_jump(OpCode::Jump, line) {
             Ok(idx) => idx,
             Err(e) => return self.error(self.previous, Some(e)),
         };
+        // patch jump to else for when condition is false
         if let Err(e) = self.chunk().patch_jump(jump_if_idx) {
             self.error(self.previous, Some(e));
         };
@@ -530,6 +547,13 @@ impl Compiler {
             self.consume(TokenType::LBrace, "Expected '{' after 'else'.");
             self.block();
         }
+        else {
+            // need to return null so that type is consistent
+            if let Err(e) = self.write_constant(Value::Maybe(Box::new(None))) {
+                self.error(self.previous, Some(e));
+            }
+        }
+        // patch jump to end
         if let Err(e) = self.chunk().patch_jump(jump_else_idx) {
             self.error(self.previous, Some(e));
         }
@@ -596,6 +620,13 @@ impl Compiler {
         if let Err(e) = self.write_constant(Value::TypeDef(typedef)) {
             self.error(self.previous, Some(e));
         }
+    }
+
+    fn some(&mut self) {
+        self.consume(TokenType::LParen, "Expected '(' after 'some'.");
+        self.expression();
+        self.consume(TokenType::RParen, "Expected ')' after expression within 'some'.");
+        self.write_opcode(OpCode::WrapSome);
     }
 
     fn array(&mut self) {
