@@ -69,6 +69,25 @@ fn test_euler() {
 }
 
 #[test]
+fn test_primes() {
+    let source = "
+    is_prime := |n| {
+        if n = 2 { true }
+        else {
+            sqrt_n := int(pow(float(n), 0.5)) + 1
+            all(|p| { mod(n, p) != 0 } -> 2 to sqrt_n)
+        }
+    }
+    
+    primes := filter(is_prime, 2 to 100)
+    sum(primes)
+    ";
+
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 1060);
+}
+
+#[test]
 fn test_closure() {
     let source = "
     f := |x| {

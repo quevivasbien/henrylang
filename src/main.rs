@@ -4,7 +4,7 @@ use stdio::Write;
 use henrylang::VM;
 
 fn repl(vm: &mut VM) {
-    println!("henry repl");
+    println!("[ henrylang v0.2.0 ]");
     loop {
         print!("> ");
         // read user input
