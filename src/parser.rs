@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use lazy_static::lazy_static;
 
-use crate::ast;
+use crate::ast::{self, Expression};
 use crate::token::{TokenType, Token};
-use crate::values::Type;
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -69,7 +68,7 @@ lazy_static! {
         // groupings
         map.insert(
             TokenType::LParen,
-            ParseRule::new(Some(Parser::grouping), Some(Parser::call), Precedence::None),
+            ParseRule::new(Some(Parser::grouping), Some(Parser::call), Precedence::Call),
         );
         map.insert(
             TokenType::LBrace,
@@ -164,6 +163,12 @@ lazy_static! {
             ParseRule::new(None, Some(Parser::binary), Precedence::Assignment),
         );
 
+        // identifiers
+        map.insert(
+            TokenType::Ident,
+            ParseRule::new(Some(Parser::variable), None, Precedence::None),
+        );
+
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
             if map.get(&ttype).is_none() {
@@ -231,6 +236,13 @@ impl Parser {
             self.error(None);
         }
     }
+    fn consume_if_match(&mut self, ttype: TokenType) -> bool {
+        if self.current_ttype() == ttype {
+            self.advance();
+            return true;
+        }
+        false
+    }
     fn consume(&mut self, ttype: TokenType, message: String) {
         if self.current_ttype() == ttype {
             self.advance();
@@ -280,19 +292,32 @@ impl Parser {
 
     fn int(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();
-        Box::new(ast::Literal::new(Type::Int, token.text.clone()))
+        Box::new(ast::Literal::new(ast::Type::Int, token.text.clone()))
     }
     fn float(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();
-        Box::new(ast::Literal::new(Type::Float, token.text.clone()))
+        Box::new(ast::Literal::new(ast::Type::Float, token.text.clone()))
     }
     fn string(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();
-        Box::new(ast::Literal::new(Type::String, token.text.clone()))
+        Box::new(ast::Literal::new(ast::Type::String, token.text.clone()))
     }
     fn boolean(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();
-        Box::new(ast::Literal::new(Type::Bool, token.text.clone()))
+        Box::new(ast::Literal::new(ast::Type::Bool, token.text.clone()))
+    }
+
+    fn assignment(&mut self, name: String) -> Box<dyn ast::Expression> {
+        todo!()
+    }
+    fn variable(&mut self) -> Box<dyn ast::Expression> {
+        let name = self.previous_token().text.clone();
+        // check if this is an assignment
+        if self.current_ttype() == TokenType::Assign {
+            return self.assignment(name);
+        }
+        // proceed assuming variable is already defined
+        todo!()
     }
 
     fn unary(&mut self) -> Box<dyn ast::Expression> {
@@ -371,15 +396,52 @@ impl Parser {
     }
 
     fn call(&mut self, callee: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {
-        todo!()
+        let mut arguments = Vec::new();
+        if self.consume_if_match(TokenType::RParen) {
+            loop {
+                let expr = match self.expression() {
+                    Some(expr) => expr,
+                    None => {
+                        self.error(Some(
+                            format!("Expected expression as argument in call.")
+                        ));
+                        return Box::new(ast::ErrorExpression{});
+                    }
+                };
+                arguments.push(expr);
+                if arguments.len() > u8::MAX as usize {
+                    self.error(Some(
+                        format!("Too many arguments in call")
+                    ));
+                    break;
+                }
+                // comma is optional between arguments
+                self.consume_if_match(TokenType::Comma);
+                if self.consume_if_match(TokenType::RParen) {
+                    break;
+                }
+            }
+        }
+        match ast::Call::new(callee, arguments) {
+            Ok(call) => Box::new(call),
+            Err(e) => {
+                self.error(Some(e));
+                Box::new(ast::ErrorExpression{})
+            }
+        }
     }
 
     fn parse(&mut self) -> ast::Function {
-        let mut main = ast::Function::new("<main>".to_string(), Vec::new(), Type::Maybe);
+        let mut expressions = Vec::new();
         while !self.is_eof() {
             if let Some(expr) = self.expression() {
-                main.expressions.push(expr);
+                expressions.push(expr);
             }
+        }
+        let mut main = ast::Function::new("<main>".to_string(), Vec::new(), expressions);
+        let main_ptr = &main as *const dyn Expression;
+        for e in main.expressions.iter_mut() {
+            e.set_parent(main_ptr);
         }
         main
     }
