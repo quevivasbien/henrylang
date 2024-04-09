@@ -4,6 +4,15 @@ use std::rc::Rc;
 
 use crate::{vm::{InterpreterError, VM}, Chunk};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Type {
+    Int,
+    Float,
+    String,
+    Bool,
+    Maybe,
+}
+
 pub struct Function {
     pub name: String,
     pub num_upvalues: u16,

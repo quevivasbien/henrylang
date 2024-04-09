@@ -1,7 +1,7 @@
 use std::env;
 use stdio::Write;
 
-use henrylang::VM;
+use henrylang::*;
 
 fn repl(vm: &mut VM) {
     println!("[ henrylang v0.2.0 ]");
@@ -14,11 +14,17 @@ fn repl(vm: &mut VM) {
         if user_input == "exit\n" {
             break;
         }
-        match vm.interpret(user_input) {
-            Ok(Some(x)) => println!("{}", x),
-            Ok(None) => (),
+        let tokens = scan(user_input);
+        let ast = parser::parse(tokens);
+        match ast {
+            Ok(x) => println!("{:?}", x),
             Err(e) => println!("{}", e),
         }
+        // match vm.interpret(user_input) {
+        //     Ok(Some(x)) => println!("{}", x),
+        //     Ok(None) => (),
+        //     Err(e) => println!("{}", e),
+        // }
     }
 }
 
@@ -31,11 +37,17 @@ fn run_file(vm: &mut VM, path: &str) {
             return;
         }
     };
-    match vm.interpret(contents) {
-        Ok(Some(x)) => println!("{}", x),
-        Ok(None) => (),
+    let tokens = scan(contents);
+    let ast = parser::parse(tokens);
+    match ast {
+        Ok(x) => println!("{:?}", x),
         Err(e) => println!("{}", e),
     }
+    // match vm.interpret(contents) {
+    //     Ok(Some(x)) => println!("{}", x),
+    //     Ok(None) => (),
+    //     Err(e) => println!("{}", e),
+    // }
 }
 
 fn main() {
