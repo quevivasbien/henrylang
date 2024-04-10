@@ -1,4 +1,9 @@
+use std::rc::Rc;
+
 use crate::compiler::Compiler;
+use crate::chunk::OpCode;
+use crate::values;
+use crate::values::Value;
 use crate::token::TokenType;
 
 // struct CompileError(String);
@@ -46,7 +51,7 @@ pub trait Expression: std::fmt::Debug {
 
     // set parent should set the parent for this expression,
     // then call set_parent on all of its children
-    fn set_parent(&mut self, parent: *const dyn Expression);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>);
     fn get_parent(&self) -> Option<*const dyn Expression>;
     // get a list of variables and their types that are defined in this expression
     // will stop looking if the given expression if reached
@@ -54,9 +59,7 @@ pub trait Expression: std::fmt::Debug {
         vec![]
     }
 
-    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        unimplemented!()
-    }
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
 }
 
 #[derive(Debug)]
@@ -66,7 +69,7 @@ impl Expression for ErrorExpression {
     fn get_type(&self) -> Result<Type, String> {
         Err("ErrorExpressions have no type".to_string()).unwrap()
     }
-    fn set_parent(&mut self, _parent: *const dyn Expression) {
+    fn set_parent(&mut self, _parent: Option<*const dyn Expression>) {
         // Do nothing
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -96,11 +99,11 @@ impl Expression for Block {
     fn get_type(&self) -> Result<Type, String> {
         self.expressions.last().unwrap().get_type()
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         for e in self.expressions.iter_mut() {
-            e.set_parent(self_ptr)
+            e.set_parent(Some(self_ptr))
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -116,6 +119,15 @@ impl Expression for Block {
         }
         out
     }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        compiler.begin_scope();
+        for expr in self.expressions.iter() {
+            expr.compile(compiler)?;
+            compiler.write_opcode(OpCode::EndExpr);
+        }
+        compiler.end_scope()
+    }
 }
 
 #[derive(Debug)]
@@ -129,20 +141,27 @@ impl NameAndType {
     pub fn new(name: String, typename: String) -> Self {
         Self { name, typename, parent: None }
     }
+    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
+        vec![VarType::new(self.name.clone(), self.get_type().unwrap())]
+    }
 }
 
 impl Expression for NameAndType {
     fn get_type(&self) -> Result<Type, String> {
         Type::from_str(self.typename.as_str())
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
     fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
         vec![VarType::new(self.name.clone(), self.get_type().unwrap())]
+    }
+
+    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
+        panic!("NameAndType shouldn't be compiled")
     }
 }
 
@@ -177,11 +196,11 @@ impl Expression for Function {
         let return_type = self.block.get_type()?;
         Ok(Type::Function(param_types, Box::new(return_type)))
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.params.iter_mut().for_each(|p| p.set_parent(self_ptr));
-        self.block.set_parent(self_ptr);
+        self.params.iter_mut().for_each(|p| p.set_parent(Some(self_ptr)));
+        self.block.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
@@ -189,6 +208,22 @@ impl Expression for Function {
     fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
         // vartypes in block should have been already processed, since block is a child of function
         self.param_vartypes(upto)
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let mut inner_compiler = Compiler::new(compiler);
+        inner_compiler.function.name = self.name.clone();
+        inner_compiler.function.arity = self.params.len() as u8;
+        for param in self.params.iter() {
+            if inner_compiler.create_variable(param.name.clone())?.is_some() {
+                return Err(format!(
+                    "Function parameters should be in local scope"
+                ));
+            }
+        }
+        self.block.compile(&mut inner_compiler)?;
+        inner_compiler.write_opcode(OpCode::Return);
+        compiler.write_function(inner_compiler)
     }
 }
 
@@ -209,11 +244,21 @@ impl Expression for Literal {
     fn get_type(&self) -> Result<Type, String> {
         Ok(self.typ.clone())
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let value = match self.typ {
+            Type::Int => Value::Int(self.value.parse::<i64>().unwrap()),
+            Type::Float => Value::Float(self.value.parse::<f64>().unwrap()),
+            Type::Bool => Value::Bool(self.value.parse::<bool>().unwrap()),
+            Type::String => Value::String(Rc::new(self.value.clone())),
+            _ => unimplemented!()
+        };
+        compiler.write_constant(value)
     }
 }
 
@@ -235,13 +280,23 @@ impl Expression for Unary {
     fn get_type(&self) -> Result<Type, String> {
         self.right.get_type()
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.right.set_parent(self_ptr);
+        self.right.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.right.compile(compiler)?;
+        compiler.write_opcode(match self.op {
+            TokenType::Minus => OpCode::Negate,
+            TokenType::Bang => OpCode::Not,
+            _ => unreachable!(),
+        });
+        Ok(())
     }
 }
 
@@ -268,14 +323,46 @@ impl Expression for Binary {
     fn get_type(&self) -> Result<Type, String> {
         self.right.get_type()
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.left.set_parent(self_ptr);
-        self.right.set_parent(self_ptr);
+        self.left.set_parent(Some(self_ptr));
+        self.right.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+        if left_type != right_type {
+            // todo! this isn't quite the right type checking for all operators
+            return Err(format!(
+                "Operands must be of the same type; got {:?} and {:?}",
+                left_type, right_type
+            ));
+        }
+        self.left.compile(compiler)?;
+        self.right.compile(compiler)?;
+        compiler.write_opcode(match self.op {
+            TokenType::Eq => OpCode::Equal,
+            TokenType::NEq => OpCode::NotEqual,
+            TokenType::GT => OpCode::Greater,
+            TokenType::GEq => OpCode::GreaterEqual,
+            TokenType::LT => OpCode::Less,
+            TokenType::LEq => OpCode::LessEqual,
+            TokenType::Plus => OpCode::Add,
+            TokenType::Minus => OpCode::Subtract,
+            TokenType::Star => OpCode::Multiply,
+            TokenType::Slash => OpCode::Divide,
+            TokenType::And => OpCode::And,
+            TokenType::Or => OpCode::Or,
+            TokenType::To => OpCode::To,
+            TokenType::RightArrow => OpCode::Map,
+            _ => unreachable!(),
+        });
+        Ok(())
     }
 }
 
@@ -288,16 +375,6 @@ pub struct Call {
 
 impl Call {
     pub fn new(callee: Box<dyn Expression>, args: Vec<Box<dyn Expression>>) -> Result<Self, String> {
-        // let (argtypes, return_type) = match callee.get_type() {
-        //     Type::Function(argtypes, return_type) => (argtypes, *return_type),
-        //     _ => return Err("Cannot call this expression of this type".to_string()),
-        // };
-        // if argtypes.len() != args.len() {
-        //     return Err(format!("Wrong number of arguments; expected {} but got {}", argtypes.len(), args.len()));
-        // }
-        // if argtypes.iter().zip(args.iter()).any(|(a, b)| a != &b.get_type()) {
-        //     return Err("Argument types do not match".to_string());
-        // }
         Ok(Self { callee, args, parent: None })
     }
 }
@@ -318,16 +395,41 @@ impl Expression for Call {
             ))
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         for e in self.args.iter_mut() {
-            e.set_parent(self_ptr)
+            e.set_parent(Some(self_ptr))
         }
-        self.callee.set_parent(self_ptr);
+        self.callee.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let callee_type = self.callee.get_type()?;
+        let (paramtypes, return_type) = match callee_type {
+            Type::Function(argtypes, return_type) => (argtypes, *return_type),
+            _ => return Err(format!(
+                "Cannot call an expression of type {:?}", callee_type
+            )),
+        };
+        if paramtypes.len() != self.args.len() {
+            return Err(format!("Wrong number of arguments; expected {} but got {}", paramtypes.len(), self.args.len()));
+        }
+        let argtypes = self.args.iter().map(|e| e.get_type()).collect::<Result<Vec<_>, _>>()?;
+        if paramtypes.iter().zip(argtypes.iter()).any(|(a, b)| a != b) {
+            return Err(format!(
+                "Argument types do not match; expected {:?} but got {:?}",
+                paramtypes, argtypes
+            ));
+        }
+        for arg in self.args.iter() {
+            arg.compile(compiler)?;
+        }
+        self.callee.compile(compiler)?;
+        compiler.write_call()
     }
 }
 
@@ -366,11 +468,15 @@ impl Expression for Variable {
             }
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        compiler.get_variable(self.name.clone())
     }
 }
 
@@ -391,10 +497,10 @@ impl Expression for Assignment {
     fn get_type(&self) -> Result<Type, String> {
         self.value.get_type()
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.value.set_parent(self_ptr);
+        self.value.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
@@ -404,6 +510,12 @@ impl Expression for Assignment {
             return vec![];
         }
         vec![VarType::new(self.name.clone(), self.value.get_type().unwrap())]
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let idx = compiler.create_variable(self.name.clone())?;
+        self.value.compile(compiler)?;
+        compiler.set_variable(idx)
     }
 }
 
@@ -444,17 +556,36 @@ impl Expression for IfStatement {
             }
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.condition.set_parent(self_ptr);
-        self.then_branch.set_parent(self_ptr);
+        self.condition.set_parent(Some(self_ptr));
+        self.then_branch.set_parent(Some(self_ptr));
         if let Some(else_branch) = &mut self.else_branch {
-            else_branch.set_parent(self_ptr);
+            else_branch.set_parent(Some(self_ptr));
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let typ = self.get_type()?; // will error if types don't match
+        self.condition.compile(compiler)?;
+        let jump_if_idx = compiler.write_jump(OpCode::JumpIfFalse)?;
+        self.then_branch.compile(compiler)?;
+        if self.else_branch.is_none() {
+            compiler.write_opcode(OpCode::WrapSome);
+        }
+        let jump_else_idx = compiler.write_jump(OpCode::Jump)?;
+        compiler.patch_jump(jump_if_idx)?;
+        if let Some(else_branch) = &self.else_branch {
+            else_branch.compile(compiler)?;
+        }
+        else {
+            compiler.write_constant(Value::Maybe(Box::new(None)))?;
+        }
+        compiler.patch_jump(jump_else_idx)
     }
 }
 
@@ -483,7 +614,7 @@ impl Array {
 impl Expression for Array {
     fn get_type(&self) -> Result<Type, String> {
         match &self.elements {
-            ArrayElems::Empty(t) => Ok(t.clone()),
+            ArrayElems::Empty(t) => Ok(Type::Array(Box::new(t.clone()))),
             ArrayElems::Elements(elems) => {
                 let first_type = elems[0].get_type()?;
                 for elem in elems.iter() {
@@ -494,21 +625,34 @@ impl Expression for Array {
                         ));
                     }
                 };
-                Ok(first_type)
+                Ok(Type::Array(Box::new(first_type)))
             }
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         if let ArrayElems::Elements(elems) = &mut self.elements {
             for elem in elems.iter_mut() {
-                elem.set_parent(self_ptr)
+                elem.set_parent(Some(self_ptr))
             }
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let typ = self.get_type()?;  // todo: use this
+        match &self.elements {
+            ArrayElems::Elements(elems) => {
+                for elem in elems.iter() {
+                    elem.compile(compiler)?;
+                }
+                compiler.write_array(elems.len() as u16)
+            },
+            ArrayElems::Empty(_) => compiler.write_array(0),
+        }
     }
 }
 
@@ -545,11 +689,11 @@ impl Expression for TypeDef {
             Box::new(Type::Object(self.name.clone(), field_types))
         ))
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         for p in self.fields.iter_mut() {
-            p.set_parent(self_ptr)
+            p.set_parent(Some(self_ptr))
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -557,6 +701,14 @@ impl Expression for TypeDef {
     }
     fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
         self.field_vartypes(upto)
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let fieldnames = self.fields.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let typedef = Value::TypeDef(Rc::new(
+            values::TypeDef::new(self.name.clone(), fieldnames)
+        ));
+        compiler.write_constant(typedef)
     }
 }
 
@@ -592,13 +744,22 @@ impl Expression for GetField {
             ))
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.object.set_parent(self_ptr);
+        self.object.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let typ = self.get_type()?;  // todo: use this
+        self.object.compile(compiler)?;
+        let name = Value::String(Rc::new(
+            self.field.clone()
+        ));
+        compiler.write_constant(name)
     }
 }
 
@@ -630,14 +791,27 @@ impl Expression for Maybe {
             MaybeValue::Null(t) => Ok(t.clone()),
         }
     }
-    fn set_parent(&mut self, parent: *const dyn Expression) {
-        self.parent = Some(parent);
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         if let MaybeValue::Some(value) = &mut self.value {
-            value.set_parent(self_ptr)
+            value.set_parent(Some(self_ptr))
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        match &self.value {
+            MaybeValue::Some(e) => {
+                e.compile(compiler)?;
+                compiler.write_opcode(OpCode::WrapSome);
+                Ok(())
+            },
+            MaybeValue::Null(_) => compiler.write_constant(
+                Value::Maybe(Box::new(None))
+            ),
+        }
     }
 }

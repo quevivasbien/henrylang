@@ -14,11 +14,12 @@ fn repl(vm: &mut VM) {
         if user_input == "exit\n" {
             break;
         }
-        let tokens = scan(user_input);
-        let ast = parser::parse(tokens);
-        match ast {
-            Ok(x) => println!("{:?}", x),
-            Err(_) => println!("Parse error"),
+        let f = compiler::compile(user_input);
+        match f {
+            Ok(x) => {
+                println!("{:?}", x);
+            }
+            Err(e) => println!("{}", e),
         }
         // match vm.interpret(user_input) {
         //     Ok(Some(x)) => println!("{}", x),

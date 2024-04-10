@@ -518,6 +518,7 @@ impl Parser {
                 ));
                 return Box::new(ast::ErrorExpression{});
             }
+            self.advance();
             return match ast::Array::new_empty(typename.text) {
                 Ok(array) => Box::new(array),
                 Err(e) => {
@@ -640,16 +641,14 @@ impl Parser {
         Box::new(ast::IfStatement::new(condition, then_branch, else_branch))
     }
 
-    fn parse(&mut self) -> ast::Function {
-        let block = self.block();
-        let mut main = ast::Function::new("<main>".to_string(), Vec::new(), block);
-        let main_ptr = &main as *const dyn Expression;
-        main.block.set_parent(main_ptr);
-        main
+    fn parse(&mut self) -> Box<dyn ast::Expression> {
+        let mut block = self.block();
+        block.set_parent(None);
+        block
     }
 }
 
-pub fn parse(tokens: Vec<Token>) -> Result<ast::Function, ()> {
+pub fn parse(tokens: Vec<Token>) -> Result<Box<dyn ast::Expression>, ()> {
     let mut parser = Parser::new(tokens);
     let ast = parser.parse();
     if parser.had_error {
