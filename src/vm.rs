@@ -1,21 +1,23 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
 use std::rc::Rc;
 
-use crate::chunk::Chunk;
-use crate::values::{Object, TypeDef};
-use crate::{Closure, Function, NativeFunction, OpCode, Value, builtins, compile};
+use crate::builtins;
+use crate::chunk::{Chunk, OpCode};
+use crate::compiler;
+use crate::values::{Closure, Function, NativeFunction, Object, TypeDef, Value};
 
 #[derive(Debug)]
 pub enum InterpreterError {
-    CompileError,
+    CompileError(String),
     RuntimeError(String),
 }
 
 impl std::fmt::Display for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InterpreterError::CompileError => write!(f, "Compile error"),
+            InterpreterError::CompileError(msg) => write!(f, "Compile error: {}", msg),
             InterpreterError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
         }
     }
@@ -38,6 +40,7 @@ pub struct VM {
     pub globals: HashMap<String, Value>,
     pub last_value: Option<Value>,
     pub frames: Vec<CallFrame>,
+    pub typecontext: compiler::TypeContext,
 }
 
 impl VM {
@@ -47,14 +50,14 @@ impl VM {
             globals: builtins(),
             last_value: None,
             frames: Vec::new(),
+            typecontext: Rc::new(RefCell::new(builtins::builtin_types())),
         }
     }
 
     fn init(&mut self, function: Rc<Function>) {
         let closure = Box::new(Closure::new(function));
-        let frame = CallFrame::new(closure.clone(), 0);
+        let frame = CallFrame::new(closure, 0);
         self.frames.push(frame);
-        self.stack.push(Value::Closure(closure));
     }
 
     fn frame(&self) -> &CallFrame {
@@ -114,45 +117,30 @@ impl VM {
         }
     }
 
-    pub fn call_function(&mut self, n_args: u8, closure: Box<Closure>) -> Result<(), InterpreterError> {
-        if n_args != closure.function.arity {
-            return Err(self.runtime_err(
-                format!("Incorrect number of arguments in user-defined function `{}`: Expected {}, got {}.", closure.function, closure.function.arity, n_args)
-            ));
-        }
-        let new_frame = CallFrame::new(closure, self.stack.len() - n_args as usize - 1);
+    pub fn call_function(&mut self, closure: Box<Closure>) -> Result<(), InterpreterError> {
+        let n_args = closure.function.arity as usize;
+        let new_frame = CallFrame::new(closure, self.stack.len() - n_args);
         self.frames.push(new_frame);
         let result = match self.call()? {
             Some(x) => x,
             None => Value::Bool(false),
         };
         // clear stack used by function and function args
-        self.stack.truncate(self.stack.len() - n_args as usize - 1);
+        self.stack.truncate(self.stack.len() - n_args);
         self.stack.push(result);
         Ok(())
     }
 
-    pub fn call_native_function(&mut self, n_args: u8, function: &'static NativeFunction) -> Result<(), InterpreterError> {
-        if n_args != function.arity {
-            return Err(self.runtime_err(
-                format!("Incorrect number of arguments in built-in function `{}`: Expected {}, got {}.", function.name, function.arity, n_args)
-            ));
-        }
-        let args = self.stack.split_off(self.stack.len() - n_args as usize);
+    pub fn call_native_function(&mut self, function: &'static NativeFunction) -> Result<(), InterpreterError> {
+        let args = self.stack.split_off(self.stack.len() - function.arity as usize);
         let result = (function.function)(self, &args)?;
-        self.stack.pop();
         self.stack.push(result);
         Ok(())
     }
 
-    pub fn array_index(&mut self, n_args: u8, arr: &Vec<Value>) -> Result<(), InterpreterError> {
-        if n_args != 1 {
-            return Err(self.runtime_err(
-                format!("When accessing array, expected 1 index, got {}", n_args)
-            ));
-        }
-        let result = match self.stack.pop() {
-            Some(Value::Int(mut idx)) => {
+    pub fn array_index(&mut self, arr: &Vec<Value>) -> Result<(), InterpreterError> {
+        let result = match self.stack.pop().expect("Attempted to access array with empty stack") {
+            Value::Int(mut idx) => {
                 if idx < 0 {
                     idx = arr.len() as i64 + idx;
                 }
@@ -163,40 +151,27 @@ impl VM {
                 }
                 arr[idx as usize].clone()
             },
-            Some(x) => return Err(self.runtime_err(
+            x => return Err(self.runtime_err(
                 format!("When accessing array, expected index to be an integer, got {}", x)
             )),
-            None => panic!("Attempted to perform array access with empty stack"),
         };
-        self.stack.pop();
         self.stack.push(result);
         Ok(())
     }
 
-    pub fn create_object(&mut self, n_args: u8, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
-        if n_args != typedef.fieldnames.len() as u8 {
-            return Err(self.runtime_err(
-                format!("When creating object, expected {} field names, got {}", typedef.fieldnames.len(), n_args)
-            ));
-        }
+    pub fn create_object(&mut self, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
         let mut fields = HashMap::new();
         for name in typedef.fieldnames.iter().cloned().rev() {
             let value = self.stack.pop().expect("Call to create_object resulted in empty stack");
             fields.insert(name, value);
         }
-        self.stack.pop();
         self.stack.push(Value::Object(Rc::new(Object::new(typedef, fields))));
         Ok(())
     }
 
-    pub fn get_field(&mut self, n_args: u8, obj: Rc<Object>) -> Result<(), InterpreterError> {
-        if n_args != 1 {
-            return Err(self.runtime_err(
-                format!("When accessing field, expected 1 field name, got {}", n_args)
-            ));
-        }
-        let result = match self.stack.pop() {
-            Some(Value::String(name)) => {
+    pub fn get_field(&mut self, obj: Rc<Object>) -> Result<(), InterpreterError> {
+        let result = match self.stack.pop().expect("Attempted to access field with empty stack") {
+            Value::String(name) => {
                 match obj.fields.get(name.as_ref()) {
                     Some(x) => x.clone(),
                     None => return Err(self.runtime_err(
@@ -204,7 +179,7 @@ impl VM {
                     )),
                 }
             },
-            Some(Value::Int(mut idx)) => {
+            Value::Int(mut idx) => {
                 if idx < 0 {
                     idx = obj.fields.len() as i64 + idx;
                 }
@@ -216,12 +191,10 @@ impl VM {
                 let fieldname = &obj.typedef.fieldnames[idx as usize];
                 obj.fields.get(fieldname).unwrap().clone()
             },
-            Some(x) => return Err(self.runtime_err(
+            x => return Err(self.runtime_err(
                 format!("When accessing field, expected field name to be a string or integer, got {}", x)
             )),
-            None => panic!("Attempted to perform field access with empty stack"),
         };
-        self.stack.pop();
         self.stack.push(result);
         Ok(())
     }
@@ -278,6 +251,7 @@ impl VM {
                 },
                 OpCode::EndBlock => {
                     let n_pops = self.read_u16();
+                    println!("stack: {:?}, n_pops: {}", self.stack, n_pops);
                     self.stack.truncate(self.stack.len() - n_pops as usize);
                     self.stack.push(match &self.last_value {
                         Some(x) => x.clone(),
@@ -307,16 +281,13 @@ impl VM {
                     }
                 },
                 OpCode::Call => {
-                    let n_args = self.read_u8();
-                    match &self.stack[self.stack.len()-n_args as usize-1] {
-                        Value::Closure(f) => self.call_function(n_args, f.clone())?,
-                        Value::NativeFunction(f) => self.call_native_function(n_args, f)?,
-                        Value::Array(arr) => self.array_index(n_args, arr.clone().as_ref())?,
-                        Value::TypeDef(td) => self.create_object(n_args, td.clone())?,
-                        Value::Object(obj) => self.get_field(n_args, obj.clone())?,
-                        x => return Err(self.runtime_err(
-                            format!("Attempted to call non-callable {}", x)
-                        )),
+                    match self.stack.pop().expect("Attempted to call with empty stack") {
+                        Value::Closure(f) => self.call_function(f)?,
+                        Value::NativeFunction(f) => self.call_native_function(f)?,
+                        Value::Array(arr) => self.array_index(arr.as_ref())?,
+                        Value::TypeDef(td) => self.create_object(td)?,
+                        Value::Object(obj) => self.get_field(obj)?,
+                        _ => unreachable!()
                     };
                 },
                 OpCode::Array => {
@@ -402,7 +373,9 @@ impl VM {
     }
 
     pub fn interpret(&mut self, source: String) -> Result<Option<Value>, InterpreterError> {
-        let function = Rc::new(compile(source).map_err(|_| InterpreterError::CompileError)?);
+        let function = Rc::new(
+            compiler::compile(source, self.typecontext.clone()).map_err(|e| InterpreterError::CompileError(e))?
+        );
         self.init(function);
         self.call().map_err(|e| {
             // in case of error, clean up before returning
@@ -412,4 +385,3 @@ impl VM {
         })
     }
 }
-

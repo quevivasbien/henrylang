@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::compiler::Compiler;
+use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
 use crate::values;
 use crate::values::Value;
@@ -36,13 +36,31 @@ impl Type {
 
 #[derive(Debug, Clone)]
 pub struct VarType {
-    pub name: String,
-    pub typ: Type, 
+    name: String,
+    typ: Type, 
 }
 
 impl VarType {
     pub fn new(name: String, typ: Type) -> Self {
         Self { name, typ }
+    }
+}
+
+#[derive(Debug)]
+pub struct NameAndType {
+    name: String,
+    typename: String,
+}
+
+impl NameAndType {
+    pub fn new(name: String, typename: String) -> Self {
+        Self { name, typename }
+    }
+    fn get_type(&self) -> Result<Type, String> {
+        Type::from_str(self.typename.as_str())
+    }
+    fn vartype(&self) -> VarType {
+        VarType::new(self.name.clone(), self.get_type().unwrap())
     }
 }
 
@@ -75,8 +93,46 @@ impl Expression for ErrorExpression {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         None
     }
-    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
         Err("Tried to compile an ErrorExpression".to_string())
+    }
+}
+
+#[derive(Debug)]
+pub struct ASTTopLevel {
+    types: Vec<VarType>,
+    child: Box<dyn Expression>,
+}
+
+impl ASTTopLevel {
+    pub fn new(typecontext: TypeContext, child: Box<dyn Expression>) -> Self {
+        let mut types = Vec::new();
+        for (name, typ) in typecontext.borrow().iter() {
+            types.push(VarType::new(name.clone(), typ.clone()));
+        }
+        println!("{:?}", types);
+        Self { types, child }
+    }
+}
+
+impl Expression for ASTTopLevel {
+    fn get_type(&self) -> Result<Type, String> {
+        Ok(Type::Bool)  // just a placeholder
+    }
+    fn set_parent(&mut self, _parent: Option<*const dyn Expression>) {
+        let self_ptr = self as *const dyn Expression;
+        self.child.set_parent(Some(self_ptr));
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        None
+    }
+    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
+        println!("self len: {}", self.types.len());
+        self.types.clone()
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.child.compile(compiler)
     }
 }
 
@@ -131,41 +187,6 @@ impl Expression for Block {
 }
 
 #[derive(Debug)]
-pub struct NameAndType {
-    name: String,
-    typename: String,
-    parent: Option<*const dyn Expression>,
-}
-
-impl NameAndType {
-    pub fn new(name: String, typename: String) -> Self {
-        Self { name, typename, parent: None }
-    }
-    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
-        vec![VarType::new(self.name.clone(), self.get_type().unwrap())]
-    }
-}
-
-impl Expression for NameAndType {
-    fn get_type(&self) -> Result<Type, String> {
-        Type::from_str(self.typename.as_str())
-    }
-    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
-        self.parent = parent;
-    }
-    fn get_parent(&self) -> Option<*const dyn Expression> {
-        self.parent
-    }
-    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
-        vec![VarType::new(self.name.clone(), self.get_type().unwrap())]
-    }
-
-    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
-        panic!("NameAndType shouldn't be compiled")
-    }
-}
-
-#[derive(Debug)]
 pub struct Function {
     name: String,
     params: Vec<NameAndType>,
@@ -186,7 +207,7 @@ impl Function {
         Ok(param_types)
     }
     fn param_vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
-        self.params.iter().map(|p| p.vartypes(upto)).flatten().collect()
+        self.params.iter().map(|p| p.vartype()).collect()
     }
 }
 
@@ -199,7 +220,6 @@ impl Expression for Function {
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.params.iter_mut().for_each(|p| p.set_parent(Some(self_ptr)));
         self.block.set_parent(Some(self_ptr));
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -211,11 +231,11 @@ impl Expression for Function {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let mut inner_compiler = Compiler::new(compiler);
+        let mut inner_compiler = Compiler::new_from(compiler);
         inner_compiler.function.name = self.name.clone();
         inner_compiler.function.arity = self.params.len() as u8;
         for param in self.params.iter() {
-            if inner_compiler.create_variable(param.name.clone())?.is_some() {
+            if inner_compiler.create_variable(param.name.clone(), param.get_type()?)?.is_some() {
                 return Err(format!(
                     "Function parameters should be in local scope"
                 ));
@@ -429,7 +449,8 @@ impl Expression for Call {
             arg.compile(compiler)?;
         }
         self.callee.compile(compiler)?;
-        compiler.write_call()
+        compiler.write_opcode(OpCode::Call);
+        Ok(())
     }
 }
 
@@ -476,6 +497,7 @@ impl Expression for Variable {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let typ = self.get_type()?;  // will error if not found
         compiler.get_variable(self.name.clone())
     }
 }
@@ -513,7 +535,7 @@ impl Expression for Assignment {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let idx = compiler.create_variable(self.name.clone())?;
+        let idx = compiler.create_variable(self.name.clone(), self.value.get_type()?)?;
         self.value.compile(compiler)?;
         compiler.set_variable(idx)
     }
@@ -675,8 +697,8 @@ impl TypeDef {
         }
         Ok(field_types)
     }
-    fn field_vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
-        self.fields.iter().map(|p| p.vartypes(upto)).flatten().collect()
+    fn field_vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
+        self.fields.iter().map(|p| p.vartype()).collect()
     }
 }
 
@@ -691,10 +713,6 @@ impl Expression for TypeDef {
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
-        let self_ptr = self as *const dyn Expression;
-        for p in self.fields.iter_mut() {
-            p.set_parent(Some(self_ptr))
-        }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent

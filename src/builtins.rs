@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use lazy_static::lazy_static;
 
-use crate::{NativeFunction, Value};
+use crate::ast;
+use crate::values::{NativeFunction, Value};
 
 lazy_static! {
     static ref PRINT: NativeFunction = NativeFunction {
@@ -505,7 +506,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.call_function(1, f.clone())?;
+                        vm.call_function(f.clone())?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -523,7 +524,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.call_native_function(1, f)?;
+                        vm.call_native_function(f)?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -541,7 +542,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.array_index(1, arr)?;
+                        vm.array_index(arr)?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -579,7 +580,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.call_function(1, f.clone())?;
+                        vm.call_function(f.clone())?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -600,7 +601,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.call_native_function(1, f)?;
+                        vm.call_native_function(f)?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -621,7 +622,7 @@ lazy_static! {
                     for value in list.iter() {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(value.clone());
-                        vm.array_index(1, arr)?;
+                        vm.array_index(arr)?;
                         let result = vm.stack.pop().expect("Call to predicate resulted in empty stack");
                         match result {
                             Value::Bool(x) => {
@@ -663,21 +664,21 @@ lazy_static! {
                     for value in right.iter() {
                         vm.stack.push(Value::Bool(false)); // just a placeholder
                         vm.stack.push(value.clone());
-                        vm.call_function(1, f.clone())?;
+                        vm.call_function(f.clone())?;
                     }
                 },
                 Value::NativeFunction(f) => {
                     for value in right.iter() {
                         vm.stack.push(Value::Bool(false)); // just a placeholder
                         vm.stack.push(value.clone());
-                        vm.call_native_function(1, f)?;
+                        vm.call_native_function(f)?;
                     }
                 },
                 Value::Array(arr) => {
                     for value in right.iter() {
                         vm.stack.push(Value::Bool(false)); // just a placeholder
                         vm.stack.push(value.clone());
-                        vm.array_index(1, &arr)?;
+                        vm.array_index(&arr)?;
                     }
                 },
                 x => return Err(vm.runtime_err(
@@ -713,7 +714,7 @@ lazy_static! {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(acc.clone());
                         vm.stack.push(value.clone());
-                        vm.call_function(2, c.clone())?;
+                        vm.call_function(c.clone())?;
                         acc = vm.stack.pop().expect("Call to reduce resulted in empty stack");
                     }
                 },
@@ -727,7 +728,7 @@ lazy_static! {
                         vm.stack.push(Value::Bool(false));
                         vm.stack.push(acc.clone());
                         vm.stack.push(value.clone());
-                        vm.call_native_function(2, f)?;
+                        vm.call_native_function(f)?;
                         acc = vm.stack.pop().expect("Call to reduce resulted in empty stack");
                     }
                 },
@@ -858,6 +859,14 @@ lazy_static! {
             }
         }
     };
+}
+
+pub fn builtin_types() -> HashMap<String, ast::Type> {
+    let mut map = HashMap::new();
+    map.insert("print".to_string(), ast::Type::String);
+    // todo: add other types
+
+    map
 }
 
 pub fn builtins() -> HashMap<String, Value> {

@@ -4,7 +4,7 @@ use stdio::Write;
 use henrylang::*;
 
 fn repl(vm: &mut VM) {
-    println!("[ henrylang v0.2.0 ]");
+    println!("[ henrylang v0.3.0 ]");
     loop {
         print!("> ");
         // read user input
@@ -14,18 +14,11 @@ fn repl(vm: &mut VM) {
         if user_input == "exit\n" {
             break;
         }
-        let f = compiler::compile(user_input);
-        match f {
-            Ok(x) => {
-                println!("{:?}", x);
-            }
+        match vm.interpret(user_input) {
+            Ok(Some(x)) => println!("{}", x),
+            Ok(None) => (),
             Err(e) => println!("{}", e),
         }
-        // match vm.interpret(user_input) {
-        //     Ok(Some(x)) => println!("{}", x),
-        //     Ok(None) => (),
-        //     Err(e) => println!("{}", e),
-        // }
     }
 }
 
@@ -38,17 +31,11 @@ fn run_file(vm: &mut VM, path: &str) {
             return;
         }
     };
-    let tokens = scan(contents);
-    let ast = parser::parse(tokens);
-    match ast {
-        Ok(x) => println!("{:?}", x),
-        Err(_) => println!("Parse error"),
+    match vm.interpret(contents) {
+        Ok(Some(x)) => println!("{}", x),
+        Ok(None) => (),
+        Err(e) => println!("{}", e),
     }
-    // match vm.interpret(contents) {
-    //     Ok(Some(x)) => println!("{}", x),
-    //     Ok(None) => (),
-    //     Err(e) => println!("{}", e),
-    // }
 }
 
 fn main() {

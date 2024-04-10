@@ -1,8 +1,9 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::Type;
+use crate::{ast, parser};
 use crate::chunk::{Chunk, OpCode};
-use crate::parser;
 use crate::scanner;
 use crate::values::{Closure, Function, Value};
 
@@ -19,11 +20,7 @@ struct LocalData {
 impl Default for LocalData {
     fn default() -> Self {
         Self {
-            locals: {
-                let mut locals = Vec::new();
-                locals.push(Local { name: "".to_string(), depth: 0 });
-                locals
-            },
+            locals: Vec::new(),
             scope_depth: -1,
         }
     }
@@ -55,27 +52,30 @@ pub struct Upvalue {
     pub is_local: bool,
 }
 
+pub type TypeContext = Rc<RefCell<HashMap<String, ast::Type>>>;
+
 pub struct Compiler {
     pub function: Function,
+    pub typecontext: TypeContext,
     locals: LocalData,
     upvalues: Vec<Upvalue>,
     parent: *mut Compiler,
 }
 
-impl Default for Compiler {
-    fn default() -> Self {
+impl Compiler {
+    pub fn new(typecontext: TypeContext) -> Self {
         Self {
             function: Function::default(),
+            typecontext,
             locals: LocalData::default(),
             upvalues: Vec::new(),
             parent: std::ptr::null_mut(),
         }
     }
-}
 
-impl Compiler {
-    pub fn new(parent: *mut Compiler) -> Self {
-        Self { parent, ..Default::default() }
+    pub fn new_from(parent: &mut Compiler) -> Self {
+        let typecontext = parent.typecontext.clone();
+        Self { parent, ..Self::new(typecontext) }
     }
 
     fn chunk(&mut self) -> &mut Chunk {
@@ -96,10 +96,6 @@ impl Compiler {
     }
     pub fn patch_jump(&mut self, offset: usize) -> Result<(), String> {
         self.chunk().patch_jump(offset).map_err(|e| e.to_string())
-    }
-    pub fn write_call(&mut self) -> Result<(), String> {
-        // todo: modify write_call to not take arg_count
-        self.chunk().write_call(0, 0).map_err(|e| e.to_string())
     }
     pub fn write_function(&mut self, inner_compiler: Compiler) -> Result<(), String> {
         let closure = Value::Closure(Box::new(
@@ -124,13 +120,16 @@ impl Compiler {
         self.chunk().write_endblock(n_pops, 0).map_err(|e| e.to_string())
     }
 
-    pub fn create_variable(&mut self, name: String) -> Result<Option<u16>, String> {
+    pub fn create_variable(&mut self, name: String, typ: ast::Type) -> Result<Option<u16>, String> {
         if self.locals.scope_depth == 0 {
             // create a global variable
             return match self.chunk().create_constant(Value::String(
-                Rc::new(name)
+                Rc::new(name.clone())
             )) {
-                Ok(idx) => Ok(Some(idx)),
+                Ok(idx) => {
+                    self.typecontext.borrow_mut().insert(name, typ);
+                    Ok(Some(idx))
+                },
                 Err(e) => return Err(e.to_string()),
             };
         }
@@ -204,12 +203,12 @@ impl Compiler {
     }
 }
 
-pub fn compile(source: String) -> Result<Function, String> {
+pub fn compile(source: String, typecontext: TypeContext) -> Result<Function, String> {
     let tokens = scanner::scan(source);
-    let ast = parser::parse(tokens).map_err(|_| "Compilation halted due to parsing error.")?;
+    let ast = parser::parse(tokens, typecontext.clone()).map_err(|_| "Compilation halted due to parsing error.")?;
     #[cfg(feature = "debug")]
     println!("{:?}", ast);
-    let mut compiler = Compiler::default();
+    let mut compiler = Compiler::new(typecontext);
     ast.compile(&mut compiler)?;
     compiler.write_opcode(OpCode::Return);
     #[cfg(feature = "debug")]

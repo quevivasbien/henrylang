@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use lazy_static::lazy_static;
 
 use crate::ast::{self, Expression};
+use crate::compiler::TypeContext;
 use crate::token::{TokenType, Token};
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
@@ -641,16 +642,17 @@ impl Parser {
         Box::new(ast::IfStatement::new(condition, then_branch, else_branch))
     }
 
-    fn parse(&mut self) -> Box<dyn ast::Expression> {
-        let mut block = self.block();
-        block.set_parent(None);
-        block
+    fn parse(&mut self, typecontext: TypeContext) -> Box<dyn ast::Expression> {
+        let block = self.block();
+        let mut top_level = Box::new(ast::ASTTopLevel::new(typecontext, block));
+        top_level.set_parent(None);
+        top_level
     }
 }
 
-pub fn parse(tokens: Vec<Token>) -> Result<Box<dyn ast::Expression>, ()> {
+pub fn parse(tokens: Vec<Token>, typecontext: TypeContext) -> Result<Box<dyn ast::Expression>, ()> {
     let mut parser = Parser::new(tokens);
-    let ast = parser.parse();
+    let ast = parser.parse(typecontext);
     if parser.had_error {
         return Err(())
     }

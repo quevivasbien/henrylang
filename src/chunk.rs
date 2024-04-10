@@ -169,11 +169,6 @@ impl Chunk {
         Ok(())
     }
 
-    pub fn write_call(&mut self, arg_count: u8, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::Call, line);
-        self.bytes.write_u8(arg_count).map_err(|_| "Failed to write number of arguments to bytes")
-    }
-
     pub fn write_array(&mut self, num_elems: u16, line: usize) -> Result<(), &'static str> {
         self.write_opcode(OpCode::Array, line);
         self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
