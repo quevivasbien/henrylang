@@ -1,7 +1,7 @@
 mod ast;
 mod builtins;
 mod chunk;
-mod compiler;
+pub mod compiler;
 pub mod parser;
 mod scanner;
 mod token;

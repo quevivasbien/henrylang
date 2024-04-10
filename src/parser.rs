@@ -74,6 +74,30 @@ lazy_static! {
             TokenType::LBrace,
             ParseRule::new(Some(Parser::block), None, Precedence::None),
         );
+        map.insert(
+            TokenType::Dot,
+            ParseRule::new(None, Some(Parser::get_field), Precedence::Call),
+        );
+
+        // control flow
+        map.insert(
+            TokenType::If,
+            ParseRule::new(Some(Parser::if_statement), None, Precedence::None),
+        );
+
+        // object defs
+        map.insert(
+            TokenType::Pipe,
+            ParseRule::new(Some(Parser::function_def), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::LSquare,
+            ParseRule::new(Some(Parser::array), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Type,
+            ParseRule::new(Some(Parser::type_def), None, Precedence::None),
+        );
 
         // literals
         map.insert(
@@ -187,11 +211,13 @@ struct Parser {
 
     had_error: bool,
     panic_mode: bool,
+
+    last_name: Option<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, current: 0, previous: 0, had_error: false, panic_mode: false }
+        Self { tokens, current: 0, previous: 0, had_error: false, panic_mode: false, last_name: None }
     }
     
     fn previous_token(&self) -> &Token {
@@ -308,16 +334,27 @@ impl Parser {
     }
 
     fn assignment(&mut self, name: String) -> Box<dyn ast::Expression> {
-        todo!()
+        self.last_name = Some(name.clone());
+        let value = match self.parse_with_precedence(Precedence::Assignment) {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected an expression after ':=', but couldn't find anything.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.last_name = None;
+        Box::new(ast::Assignment::new(name, value))
     }
     fn variable(&mut self) -> Box<dyn ast::Expression> {
         let name = self.previous_token().text.clone();
         // check if this is an assignment
-        if self.current_ttype() == TokenType::Assign {
+        if self.consume_if_match(TokenType::Assign) {
             return self.assignment(name);
         }
         // proceed assuming variable is already defined
-        todo!()
+        Box::new(ast::Variable::new(name))
     }
 
     fn unary(&mut self) -> Box<dyn ast::Expression> {
@@ -362,6 +399,12 @@ impl Parser {
     }
 
     fn grouping(&mut self) -> Box<dyn ast::Expression> {
+        if self.consume_if_match(TokenType::RParen) {
+            self.error(Some(
+                format!("Found nothing in grouping parentheses. Parentheses must contain at least one expression or be associated with a call.")
+            ));
+            return Box::new(ast::ErrorExpression{});
+        }
         let expr = self.parse_with_precedence(Precedence::None.next());
         self.consume(
             TokenType::RParen,
@@ -369,20 +412,33 @@ impl Parser {
         );
         match expr {
             Some(expr) => expr,
-            None => Box::new(ast::Maybe::new(None))
+            None => {
+                self.error(Some(
+                    format!("This should be unreachable.")
+                ));
+                Box::new(ast::ErrorExpression{})
+            }
         }
     }
 
     fn block(&mut self) -> Box<dyn ast::Expression> {
+        // we've started a new context, so we can start reporting errors again
+        self.panic_mode = false;
         let mut expressions = Vec::new();
-        while self.current_ttype() != TokenType::RBrace && !self.is_eof() {
-            if let Some(expr) = self.expression() {
-                expressions.push(expr);
+        while !self.consume_if_match(TokenType::RBrace) && !self.is_eof() {
+            match self.expression() {
+                Some(expr) => expressions.push(expr),
+                None => {
+                    self.error(Some(
+                        format!("Expected expression in block but found {} instead.", self.current_token().text)
+                    ));
+                    return Box::new(ast::ErrorExpression{});
+                }
             }
         }
-        self.consume(TokenType::RBrace, "Expected '}' after block.".to_string());
         if expressions.is_empty() {
-            Box::new(ast::Maybe::new(None))
+            self.error(Some("Expected at least one expression in block.".to_string()));
+            return Box::new(ast::ErrorExpression{});
         }
         else {
             match ast::Block::new(expressions) {
@@ -395,9 +451,128 @@ impl Parser {
         }
     }
 
+    fn function_def(&mut self) -> Box<dyn ast::Expression> {
+        // read parameter list
+        let mut params = Vec::new();
+        while !self.consume_if_match(TokenType::Pipe) && !self.is_eof() {
+            let name = self.current_token();
+            if name.ttype != TokenType::Ident {
+                self.error(Some(
+                    format!("In function definition, expected parameter name but found {} instead.", name.text)
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            let name = name.text.clone();
+            self.advance();
+            self.consume(TokenType::Colon, format!(
+                "Missing type annotation for parameter {}.", name
+            ));
+            let typename = self.current_token().clone();
+            if typename.ttype != TokenType::Ident {
+                self.error(Some(
+                    format!("In function definition, expected parameter type but found {} instead.", typename.text)
+                ))
+            };
+            self.advance();
+            params.push(ast::NameAndType::new(name, typename.text));
+            if params.len() > u8::MAX as usize {
+                self.error(Some(
+                    format!("Too many parameters in function definition.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            // comma is optional between parameter names
+            self.consume_if_match(TokenType::Comma);
+        }
+        self.consume(TokenType::LBrace, "Expected '{' after function parameters.".to_string());
+        let body = self.block();
+        let name = match &self.last_name {
+            Some(name) => name.clone(),
+            None => "<anon>".to_string()
+        };
+        Box::new(ast::Function::new(name, params, body))
+    }
+
+    fn array(&mut self) -> Box<dyn ast::Expression> {
+        let mut entries = Vec::new();
+        while !self.consume_if_match(TokenType::RSquare) && !self.is_eof() {
+            let expr = match self.expression() {
+                Some(expr) => expr,
+                None => {
+                    self.error(Some(
+                        format!("Expected expression in array but found {} instead.", self.current_token().text)
+                    ));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            };
+            entries.push(expr);
+            self.consume_if_match(TokenType::Comma);
+        }
+
+        if entries.is_empty() {
+            self.consume(TokenType::Colon, "Empty arrays must be annoted with a type".to_string());
+            let typename = self.current_token().clone();
+            if typename.ttype != TokenType::Ident {
+                self.error(Some(
+                    format!("Expect a type name but found {} instead.", typename.text)
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            return match ast::Array::new_empty(typename.text) {
+                Ok(array) => Box::new(array),
+                Err(e) => {
+                    self.error(Some(e));
+                    Box::new(ast::ErrorExpression{})
+                }
+            };
+        }
+        Box::new(ast::Array::new(entries))
+    }
+
+    fn type_def(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LBrace, "Expected '{' after 'type'.".to_string());
+        let mut fields = Vec::new();
+        while !self.consume_if_match(TokenType::RBrace) && !self.is_eof() {
+            let name = self.current_token();
+            if name.ttype != TokenType::Ident {
+                self.error(Some(
+                    format!("In type definition, expected field name but found {} instead.", name.text)
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            let name = name.text.clone();
+            self.advance();
+            self.consume(TokenType::Colon, format!(
+                "Missing type annotation for field {}.", name
+            ));
+            let typename = self.current_token().clone();
+            if typename.ttype != TokenType::Ident {
+                self.error(Some(
+                    format!("In type definition, expected field type but found {} instead.", typename.text)
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            self.advance();
+            fields.push(ast::NameAndType::new(name, typename.text));
+            if fields.len() > u8::MAX as usize {
+                self.error(Some(
+                    format!("Too many fields in type definition.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+            self.consume_if_match(TokenType::Comma);
+        }
+        let name = match &self.last_name {
+            Some(name) => name.clone(),
+            None => "<anontype>".to_string(),
+        };
+        Box::new(ast::TypeDef::new(name, fields))
+    }
+
+
     fn call(&mut self, callee: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {
         let mut arguments = Vec::new();
-        if self.consume_if_match(TokenType::RParen) {
+        if !self.consume_if_match(TokenType::RParen) {
             loop {
                 let expr = match self.expression() {
                     Some(expr) => expr,
@@ -431,23 +606,54 @@ impl Parser {
         }
     }
 
-    fn parse(&mut self) -> ast::Function {
-        let mut expressions = Vec::new();
-        while !self.is_eof() {
-            if let Some(expr) = self.expression() {
-                expressions.push(expr);
+    fn get_field(&mut self, obj: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {
+        let name = self.current_token();
+        if name.ttype != TokenType::Ident {
+            self.error(Some(
+                format!("Expected field name but found {} instead.", name.text)
+            ));
+            return Box::new(ast::ErrorExpression{});
+        }
+        let name = name.text.clone();
+        self.advance();
+        Box::new(ast::GetField::new(obj, name))
+    }
+
+    fn if_statement(&mut self) -> Box<dyn ast::Expression> {
+        let condition = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected expression as condition after 'if'.")
+                ));
+                return Box::new(ast::ErrorExpression{});
             }
+        };
+        self.consume(TokenType::LBrace, "Expected '{' after 'if' condition.".to_string());
+        let then_branch = self.block();
+        let else_branch = if self.consume_if_match(TokenType::Else) {
+            Some(self.block())
         }
-        let mut main = ast::Function::new("<main>".to_string(), Vec::new(), expressions);
+        else {
+            None
+        };
+        Box::new(ast::IfStatement::new(condition, then_branch, else_branch))
+    }
+
+    fn parse(&mut self) -> ast::Function {
+        let block = self.block();
+        let mut main = ast::Function::new("<main>".to_string(), Vec::new(), block);
         let main_ptr = &main as *const dyn Expression;
-        for e in main.expressions.iter_mut() {
-            e.set_parent(main_ptr);
-        }
+        main.block.set_parent(main_ptr);
         main
     }
 }
 
-pub fn parse(tokens: Vec<Token>) -> Result<ast::Function, String> {
+pub fn parse(tokens: Vec<Token>) -> Result<ast::Function, ()> {
     let mut parser = Parser::new(tokens);
-    Ok(parser.parse())
+    let ast = parser.parse();
+    if parser.had_error {
+        return Err(())
+    }
+    Ok(ast)
 }

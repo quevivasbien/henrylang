@@ -18,7 +18,7 @@ fn repl(vm: &mut VM) {
         let ast = parser::parse(tokens);
         match ast {
             Ok(x) => println!("{:?}", x),
-            Err(e) => println!("{}", e),
+            Err(_) => println!("Parse error"),
         }
         // match vm.interpret(user_input) {
         //     Ok(Some(x)) => println!("{}", x),
@@ -41,7 +41,7 @@ fn run_file(vm: &mut VM, path: &str) {
     let ast = parser::parse(tokens);
     match ast {
         Ok(x) => println!("{:?}", x),
-        Err(e) => println!("{}", e),
+        Err(_) => println!("Parse error"),
     }
     // match vm.interpret(contents) {
     //     Ok(Some(x)) => println!("{}", x),
