@@ -1,36 +1,64 @@
 use std::rc::Rc;
+
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use crate::compiler;
-use crate::Value;
+use crate::values::{bytes_to_arr, HeapValue, Value};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
     Return,
+    ReturnArray,
     
+    // Constants
     True,
     False,
+    Constant,
+    HeapConstant,
     
     // Comparisons
-    Equal,
-    NotEqual,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
+    IntEqual,
+    IntNotEqual,
+    IntGreater,
+    IntGreaterEqual,
+    IntLess,
+    IntLessEqual,
+
+    FloatEqual,
+    FloatNotEqual,
+    FloatGreater,
+    FloatGreaterEqual,
+    FloatLess,
+    FloatLessEqual,
+    
+    BoolEqual,
+    BoolNotEqual,
+
+    ArrayEqual,
+    ArrayNotEqual,
     
     // Binary operations
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
+    IntAdd,
+    IntSubtract,
+    IntMultiply,
+    IntDivide,
+
+    FloatAdd,
+    FloatSubtract,
+    FloatMultiply,
+    FloatDivide,
+
+    Concat,
+    
     And,
     Or,
+    
     To,
     
     // Unary operations
-    Negate,
+    IntNegate,
+    FloatNegate,
     Not,
 
     EndExpr,
@@ -39,9 +67,9 @@ pub enum OpCode {
     JumpIfFalse,
     Call,
     Array,
+    ArrayArray,
     Map,
-    
-    Constant,
+
     SetGlobal,
     GetGlobal,
     SetLocal,
@@ -60,7 +88,10 @@ impl From<u8> for OpCode {
 
 pub struct Chunk {
     bytes: Vec<u8>,
+    // for storing 64-bit values
     constants: Vec<Value>,
+    // for storing larger values (strings, arrays, etc.)
+    heap_constants: Vec<HeapValue>,
     newlines: Vec<usize>,
 }
 
@@ -69,6 +100,7 @@ impl Chunk {
         Self {
             bytes: Vec::new(),
             constants: Vec::new(),
+            heap_constants: Vec::new(),
             newlines: Vec::new(),
         }
     }
@@ -106,21 +138,36 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx as u16).map_err(|_| "Failed to write index of constant to bytes")
     }
 
-    pub fn write_closure(&mut self, value: Value, upvalues: Vec<compiler::Upvalue>, line: usize) -> Result<(), &'static str> {
-        match &value {
-            Value::Closure(func) => func.clone(),
-            _ => return Err("Value is not a closure"),
-        };
-        let idx = self.create_constant(value)?;
-        self.write_opcode(OpCode::Closure, line);
-        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
-        for upvalue in upvalues.iter() {
-            self.bytes.write_u8(
-                if upvalue.is_local { 1 } else { 0 }
-            ).map_err(|_| "Failed to write upvalue locality to bytes")?;
-            self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
+    pub fn create_heap_constant(&mut self, value: HeapValue) -> Result<u16, &'static str> {
+        self.heap_constants.push(value);
+        let idx = self.heap_constants.len() - 1;
+        if idx > u16::MAX as usize {
+            return Err("Too many constants in one chunk");
         }
-        Ok(())
+        return Ok(idx as u16);
+    }
+    pub fn write_heap_constant(&mut self, value: HeapValue, line: usize) -> Result<(), &'static str> {
+        let idx = self.create_heap_constant(value)?;
+        self.write_opcode(OpCode::HeapConstant, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of constant to bytes")
+    }
+
+    pub fn write_closure(&mut self, value: Value, upvalues: Vec<compiler::Upvalue>, line: usize) -> Result<(), &'static str> {
+        unimplemented!("write_closure")
+        // match &value {
+        //     Value::Closure(func) => func.clone(),
+        //     _ => return Err("Value is not a closure"),
+        // };
+        // let idx = self.create_constant(value)?;
+        // self.write_opcode(OpCode::Closure, line);
+        // self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
+        // for upvalue in upvalues.iter() {
+        //     self.bytes.write_u8(
+        //         if upvalue.is_local { 1 } else { 0 }
+        //     ).map_err(|_| "Failed to write upvalue locality to bytes")?;
+        //     self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
+        // }
+        // Ok(())
     }
 
     pub fn write_set_global(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
@@ -128,7 +175,8 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable to bytes")
     }
     pub fn write_get_global(&mut self, name: String, line: usize) -> Result<(), &'static str> {
-        let idx = self.create_constant(Value::String(Rc::new(name)))?;
+        let name = HeapValue::String(Rc::new(name));
+        let idx = self.create_heap_constant(name)?;
         self.write_opcode(OpCode::GetGlobal, line);
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable name to bytes")
     }
@@ -143,9 +191,10 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of upvalue to bytes")
     }
 
-    pub fn write_endblock(&mut self, n_pops: u16, line: usize) -> Result<(), &'static str> {
+    pub fn write_endblock(&mut self, n_pops: u16, n_heap_pops: u16, line: usize) -> Result<(), &'static str> {
         self.write_opcode(OpCode::EndBlock, line);
-        self.bytes.write_u16::<BigEndian>(n_pops).map_err(|_| "Failed to write number of pops to bytes")
+        self.bytes.write_u16::<BigEndian>(n_pops).map_err(|_| "Failed to write number of pops to bytes")?;
+        self.bytes.write_u16::<BigEndian>(n_heap_pops).map_err(|_| "Failed to write number of heap pops to bytes")
     }
     
     pub fn write_jump(&mut self, opcode: OpCode, line: usize) -> Result<usize, &'static str> {
@@ -173,6 +222,10 @@ impl Chunk {
         self.write_opcode(OpCode::Array, line);
         self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
     }
+    pub fn write_array_array(&mut self, num_elems: u16, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(OpCode::ArrayArray, line);
+        self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
+    }
 
     pub fn read_u8(&self, ip: &mut usize) -> u8 {
         let out = self.bytes[*ip];
@@ -184,9 +237,13 @@ impl Chunk {
         *ip += 2;
         out
     }
-    pub fn read_constant(&self, ip: &mut usize) -> &Value {
+    pub fn read_constant(&self, ip: &mut usize) -> Value {
         let index = self.read_u16(ip);
-        &self.constants[index as usize]
+        self.constants[index as usize]
+    }
+    pub fn read_heap_constant(&self, ip: &mut usize) -> &HeapValue {
+        let index = self.read_u16(ip);
+        &self.heap_constants[index as usize]
     }
 
     // figures out line number for a given byte index
@@ -202,142 +259,32 @@ impl Chunk {
     }
 
     #[cfg(feature = "debug")]
-    pub fn disassemble_instruction(&self, ip: &mut usize) -> bool {
-        if *ip >= self.bytes.len() {
-            return true;
-        }
+    pub fn disassemble_instruction(&self, ip: &mut usize) {
         let ip0 = *ip;
         let opcode = OpCode::from(self.read_u8(ip));
         match opcode {
-            OpCode::Return => {
-                println!("{:04} RETURN", ip0);
+            OpCode::Constant => {
+                let constant = self.read_constant(ip);
+                println!("{:04} Constant {:?}", ip0, constant);
             },
-            OpCode::True => {
-                println!("{:04} TRUE", ip0);
-            },
-            OpCode::False => {
-                println!("{:04} FALSE", ip0);
-            },
-            OpCode::Equal => {
-                println!("{:04} EQUAL", ip0);
-            },
-            OpCode::NotEqual => {
-                println!("{:04} NOTEQUAL", ip0);
-            },
-            OpCode::Greater => {
-                println!("{:04} GREATER", ip0);
-            },
-            OpCode::GreaterEqual => {
-                println!("{:04} GREATEREQUAL", ip0);
-            },
-            OpCode::Less => {
-                println!("{:04} LESS", ip0);
-            },
-            OpCode::LessEqual => {
-                println!("{:04} LESSEQUAL", ip0);
-            },
-            OpCode::Add => {
-                println!("{:04} ADD", ip0);
-            },
-            OpCode::Subtract => {
-                println!("{:04} SUBTRACT", ip0);
-            },
-            OpCode::Multiply => {
-                println!("{:04} MULTIPLY", ip0);
-            },
-            OpCode::Divide => {
-                println!("{:04} DIVIDE", ip0);
-            },
-            OpCode::And => {
-                println!("{:04} AND", ip0);
-            },
-            OpCode::Or => {
-                println!("{:04} OR", ip0);
-            },
-            OpCode::To => {
-                println!("{:04} TO", ip0);
-            },
-            OpCode::Negate => {
-                println!("{:04} NEGATE", ip0);
-            },
-            OpCode::Not => {
-                println!("{:04} NOT", ip0);
-            },
-            OpCode::EndExpr => {
-                println!("{:04} ENDEXPR", ip0);
+            OpCode::HeapConstant => {
+                let constant = self.read_heap_constant(ip);
+                println!("{:04} HeapConstant {:#x?}", ip0, constant);
             },
             OpCode::EndBlock => {
                 let n_pops = self.read_u16(ip);
-                println!("{:04} ENDBLOCK {}", ip0, n_pops);
-            },
-            OpCode::Jump => {
-                let offset = self.read_u16(ip);
-                println!("{:04} JUMP {}", ip0, offset);
-            },
-            OpCode::JumpIfFalse => {
-                let offset = self.read_u16(ip);
-                println!("{:04} JUMPIFFALSE {}", ip0, offset);
-            },
-            OpCode::Call => {
-                let arg_count = self.read_u8(ip);
-                println!("{:04} CALL {}", ip0, arg_count);
-            },
-            OpCode::Array => {
-                let num_elems = self.read_u16(ip);
-                println!("{:04} ARRAY {}", ip0, num_elems);  
-            },
-            OpCode::Map => {
-                println!("{:04} MAP", ip0);
-            },
-            OpCode::Constant => {
-                let constant = self.read_constant(ip);
-                println!("{:04} CONSTANT {:?}", ip0, constant);
-            },
-            OpCode::SetGlobal => {
-                let name = self.read_constant(ip);
-                println!("{:04} SETGLOBAL {:?}", ip0, name);
-            },
-            OpCode::GetGlobal => {
-                let name = self.read_constant(ip);
-                println!("{:04} GETGLOBAL {:?}", ip0, name);
-            },
-            OpCode::SetLocal => {
-                println!("{:04} SETLOCAL", ip0);
-            },
-            OpCode::GetLocal => {
-                let idx = self.read_u16(ip);
-                println!("{:04} GETLOCAL {}", ip0, idx);
-            },
-            OpCode::Closure => {
-                println!("{:04} CLOSURE", ip0);
-                let closure = match self.read_constant(ip) {
-                    Value::Closure(f) => f,
-                    _ => unreachable!(),
-                };
-                for _ in 0..closure.function.num_upvalues {
-                    let is_local = self.read_u8(ip) == 1;
-                    let index = self.read_u16(ip);
-                    println!("{:04} | UPVALUE {} {}", *ip - 2, is_local, index);
-                }
-            },
-            OpCode::GetUpvalue => {
-                let idx = self.read_u16(ip);
-                println!("{:04} GETUPVALUE {}", ip0, idx);
-            },
-            OpCode::WrapSome => {
-                println!("{:04} SOME", ip0);
-            },
+                let n_heap_pops = self.read_u16(ip);
+                println!("{:04} EndBlock {:?} {:?}", ip0, n_pops, n_heap_pops);
+            }
+            x => println!("{:04} {:?}", ip0, x),
         }
-        return false
     }
 
     #[cfg(feature = "debug")]
     pub fn disassemble(&self) {
         let mut ip = 0;
-        loop {
-            if self.disassemble_instruction(&mut ip) {
-                break;
-            }
+        while ip < self.bytes.len() {
+            self.disassemble_instruction(&mut ip);
         }
     }
 }

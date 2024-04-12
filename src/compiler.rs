@@ -5,10 +5,11 @@ use std::rc::Rc;
 use crate::{ast, parser};
 use crate::chunk::{Chunk, OpCode};
 use crate::scanner;
-use crate::values::{Closure, Function, Value};
+use crate::values::{Closure, Function, HeapValue, Value};
 
 struct Local {
     name: String,
+    is_array: bool,
     depth: i32,
 }
 
@@ -59,6 +60,8 @@ pub struct Compiler {
     pub typecontext: TypeContext,
     locals: LocalData,
     upvalues: Vec<Upvalue>,
+    // I'm aware that storing pointers rather than references is not ideal, but this drastically simplifies the code, making it so there aren't lifetimes attached to everything
+    // In practice, this should be fine: Compilers are only ever created and used by their parents.
     parent: *mut Compiler,
 }
 
@@ -88,8 +91,15 @@ impl Compiler {
     pub fn write_constant(&mut self, value: Value) -> Result<(), String> {
         self.chunk().write_constant(value, 0).map_err(|e| e.to_string())
     }
+    pub fn write_string(&mut self, s: String) -> Result<(), String> {
+        let s = HeapValue::String(Rc::new(s));
+        self.chunk().write_heap_constant(s, 0).map_err(|e| e.to_string())
+    }
     pub fn write_array(&mut self, len: u16) -> Result<(), String> {
         self.chunk().write_array(len, 0).map_err(|e| e.to_string())
+    }
+    pub fn write_array_array(&mut self, len: u16) -> Result<(), String> {
+        self.chunk().write_array_array(len, 0).map_err(|e| e.to_string())
     }
     pub fn write_jump(&mut self, opcode: OpCode) -> Result<usize, String> {
         self.chunk().write_jump(opcode, 0).map_err(|e| e.to_string())
@@ -98,10 +108,11 @@ impl Compiler {
         self.chunk().patch_jump(offset).map_err(|e| e.to_string())
     }
     pub fn write_function(&mut self, inner_compiler: Compiler) -> Result<(), String> {
-        let closure = Value::Closure(Box::new(
-            Closure::new(Rc::new(inner_compiler.function))
-        ));
-        self.chunk().write_closure(closure, inner_compiler.upvalues, 0).map_err(|e| e.to_string())
+        unimplemented!("write_function")
+        // let closure = Value::Closure(Box::new(
+        //     Closure::new(Rc::new(inner_compiler.function))
+        // ));
+        // self.chunk().write_closure(closure, inner_compiler.upvalues, 0).map_err(|e| e.to_string())
     }
 
     pub fn begin_scope(&mut self) {
@@ -110,22 +121,27 @@ impl Compiler {
     pub fn end_scope(&mut self) -> Result<(), String> {
         self.locals.scope_depth -= 1;
         let mut n_pops = 0;
-        while match self.locals.locals.last() {
-            Some(local) => local.depth > self.locals.scope_depth,
-            None => false,
-        } {
-            n_pops += 1;
+        let mut n_array_pops = 0;
+        while let Some(local) = self.locals.locals.last() {
+            if local.depth <= self.locals.scope_depth {
+                break;
+            }
+            if local.is_array {
+                n_array_pops += 1;
+            }
+            else {
+                n_pops += 1;
+            }
             self.locals.locals.pop();
         }
-        self.chunk().write_endblock(n_pops, 0).map_err(|e| e.to_string())
+        self.chunk().write_endblock(n_pops, n_array_pops, 0).map_err(|e| e.to_string())
     }
 
     pub fn create_variable(&mut self, name: String, typ: ast::Type) -> Result<Option<u16>, String> {
         if self.locals.scope_depth == 0 {
             // create a global variable
-            return match self.chunk().create_constant(Value::String(
-                Rc::new(name.clone())
-            )) {
+            let name_hv = HeapValue::String(Rc::new(name.clone()));
+            return match self.chunk().create_heap_constant(name_hv) {
                 Ok(idx) => {
                     self.typecontext.borrow_mut().insert(name, typ);
                     Ok(Some(idx))
@@ -134,8 +150,14 @@ impl Compiler {
             };
         }
         // create a local variable
+        let is_array = match typ {
+            ast::Type::Array(_) => true,
+            ast::Type::String => true,
+            _ => false,
+        };
         let local = Local {
             name,
+            is_array,
             depth: self.locals.scope_depth,
         };
         self.locals.push(local).map_err(|e| e.to_string())?;
@@ -203,16 +225,14 @@ impl Compiler {
     }
 }
 
-pub fn compile(source: String, typecontext: TypeContext) -> Result<Function, String> {
+pub fn compile(source: String, typecontext: TypeContext) -> Result<(Function, ast::Type), String> {
     let tokens = scanner::scan(source);
     let ast = parser::parse(tokens, typecontext.clone()).map_err(|_| "Compilation halted due to parsing error.")?;
     #[cfg(feature = "debug")]
     println!("{:?}", ast);
     let mut compiler = Compiler::new(typecontext);
     ast.compile(&mut compiler)?;
-    compiler.write_opcode(OpCode::Return);
-    #[cfg(feature = "debug")]
-    compiler.function.chunk.disassemble();
+    let return_type = ast.get_type()?;
 
-    Ok(compiler.function)
+    Ok((compiler.function, return_type))
 }

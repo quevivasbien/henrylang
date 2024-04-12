@@ -1,8 +1,5 @@
-use std::rc::Rc;
-
 use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
-use crate::values;
 use crate::values::Value;
 use crate::token::TokenType;
 
@@ -110,14 +107,13 @@ impl ASTTopLevel {
         for (name, typ) in typecontext.borrow().iter() {
             types.push(VarType::new(name.clone(), typ.clone()));
         }
-        println!("{:?}", types);
         Self { types, child }
     }
 }
 
 impl Expression for ASTTopLevel {
     fn get_type(&self) -> Result<Type, String> {
-        Ok(Type::Bool)  // just a placeholder
+        self.child.get_type()
     }
     fn set_parent(&mut self, _parent: Option<*const dyn Expression>) {
         let self_ptr = self as *const dyn Expression;
@@ -132,7 +128,13 @@ impl Expression for ASTTopLevel {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        self.child.compile(compiler)
+        self.child.compile(compiler)?;
+        compiler.write_opcode(match self.get_type()? {
+            Type::Array(_) => OpCode::ReturnArray,
+            Type::String => OpCode::ReturnArray,
+            _ => OpCode::Return,
+        });
+        Ok(())
     }
 }
 
@@ -242,7 +244,11 @@ impl Expression for Function {
             }
         }
         self.block.compile(&mut inner_compiler)?;
-        inner_compiler.write_opcode(OpCode::Return);
+        inner_compiler.write_opcode(match self.get_type()? {
+            Type::Array(_) => OpCode::ReturnArray,
+            Type::String => OpCode::ReturnArray,
+            _ => OpCode::Return,
+        });
         compiler.write_function(inner_compiler)
     }
 }
@@ -272,10 +278,13 @@ impl Expression for Literal {
     }
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let value = match self.typ {
-            Type::Int => Value::Int(self.value.parse::<i64>().unwrap()),
-            Type::Float => Value::Float(self.value.parse::<f64>().unwrap()),
-            Type::Bool => Value::Bool(self.value.parse::<bool>().unwrap()),
-            Type::String => Value::String(Rc::new(self.value.clone())),
+            Type::Int => Value::from_i64(self.value.parse::<i64>().unwrap()),
+            Type::Float => Value::from_f64(self.value.parse::<f64>().unwrap()),
+            Type::Bool => Value::from_bool(self.value.parse::<bool>().unwrap()),
+            Type::String => {
+                let string = self.value[1..self.value.len() - 1].to_string();
+                return compiler.write_string(string);
+            },
             _ => unimplemented!()
         };
         compiler.write_constant(value)
@@ -311,11 +320,30 @@ impl Expression for Unary {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         self.right.compile(compiler)?;
-        compiler.write_opcode(match self.op {
-            TokenType::Minus => OpCode::Negate,
-            TokenType::Bang => OpCode::Not,
-            _ => unreachable!(),
-        });
+        match self.right.get_type()? {
+            Type::Int => match self.op {
+                TokenType::Minus => compiler.write_opcode(OpCode::IntNegate),
+                x => return Err(format!(
+                    "Unary operator {:?} is not defined for type Int",
+                    x
+                )),
+            },
+            Type::Float => match self.op {
+                TokenType::Minus => compiler.write_opcode(OpCode::FloatNegate),
+                x => return Err(format!(
+                    "Unary operator {:?} is not defined for type Float",
+                    x
+                )),
+            },
+            Type::Bool => match self.op {
+                TokenType::Bang => compiler.write_opcode(OpCode::Not),
+                x => return Err(format!(
+                    "Unary operator {:?} is not defined for type Bool",
+                    x
+                ))
+            },
+            x => return Err(format!("Type {:?} not yet supported for unary operation", x)),
+        };
         Ok(())
     }
 }
@@ -341,7 +369,15 @@ impl Binary {
 
 impl Expression for Binary {
     fn get_type(&self) -> Result<Type, String> {
-        self.right.get_type()
+        match self.op {
+            TokenType::Eq
+            | TokenType::NEq
+            | TokenType::GEq
+            | TokenType::LEq
+            | TokenType::GT
+            | TokenType::LT => Ok(Type::Bool),
+            _ => self.left.get_type(),
+        }
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -365,23 +401,72 @@ impl Expression for Binary {
         }
         self.left.compile(compiler)?;
         self.right.compile(compiler)?;
-        compiler.write_opcode(match self.op {
-            TokenType::Eq => OpCode::Equal,
-            TokenType::NEq => OpCode::NotEqual,
-            TokenType::GT => OpCode::Greater,
-            TokenType::GEq => OpCode::GreaterEqual,
-            TokenType::LT => OpCode::Less,
-            TokenType::LEq => OpCode::LessEqual,
-            TokenType::Plus => OpCode::Add,
-            TokenType::Minus => OpCode::Subtract,
-            TokenType::Star => OpCode::Multiply,
-            TokenType::Slash => OpCode::Divide,
-            TokenType::And => OpCode::And,
-            TokenType::Or => OpCode::Or,
-            TokenType::To => OpCode::To,
-            TokenType::RightArrow => OpCode::Map,
-            _ => unreachable!(),
-        });
+
+        match left_type {
+            Type::Int => {
+                compiler.write_opcode(match self.op {
+                    TokenType::Eq => OpCode::IntEqual,
+                    TokenType::NEq => OpCode::IntNotEqual,
+                    TokenType::GT => OpCode::IntGreater,
+                    TokenType::GEq => OpCode::IntGreaterEqual,
+                    TokenType::LT => OpCode::IntLess,
+                    TokenType::LEq => OpCode::IntLessEqual,
+                    TokenType::Plus => OpCode::IntAdd,
+                    TokenType::Minus => OpCode::IntSubtract,
+                    TokenType::Star => OpCode::IntMultiply,
+                    TokenType::Slash => OpCode::IntDivide,
+                    TokenType::To => OpCode::To,
+                    x => return Err(format!(
+                        "Operator {:?} not supported for type {:?}",
+                        x, left_type
+                    )),
+                })
+            },
+            Type::Float => {
+                compiler.write_opcode(match self.op {
+                    TokenType::Eq => OpCode::FloatEqual,
+                    TokenType::NEq => OpCode::FloatNotEqual,
+                    TokenType::GT => OpCode::FloatGreater,
+                    TokenType::GEq => OpCode::FloatGreaterEqual,
+                    TokenType::LT => OpCode::FloatLess,
+                    TokenType::LEq => OpCode::FloatLessEqual,
+                    TokenType::Plus => OpCode::FloatAdd,
+                    TokenType::Minus => OpCode::FloatSubtract,
+                    TokenType::Star => OpCode::FloatMultiply,
+                    TokenType::Slash => OpCode::FloatDivide,
+                    x => return Err(format!(
+                        "Operator {:?} not supported for type {:?}",
+                        x, left_type
+                    ))
+                })
+            },
+            Type::Bool => {
+                compiler.write_opcode(match self.op {
+                    TokenType::Eq => OpCode::BoolEqual,
+                    TokenType::NEq => OpCode::BoolNotEqual,
+                    TokenType::And => OpCode::And,
+                    TokenType::Or => OpCode::Or,
+                    x => return Err(format!(
+                        "Operator {:?} not supported for type {:?}",
+                        x, left_type
+                    ))
+                })
+            },
+            Type::String => {
+                compiler.write_opcode(match self.op {
+                    TokenType::Eq => OpCode::ArrayEqual,
+                    TokenType::NEq => OpCode::ArrayNotEqual,
+                    TokenType::Plus => OpCode::Concat,
+                    x => return Err(format!(
+                        "Operator {:?} not supported for type {:?}",
+                        x, left_type
+                    ))
+                })
+            },
+            x => return Err(format!(
+                "Type {:?} not yet supported for binary operation", x
+            ))
+        };
         Ok(())
     }
 }
@@ -605,7 +690,7 @@ impl Expression for IfStatement {
             else_branch.compile(compiler)?;
         }
         else {
-            compiler.write_constant(Value::Maybe(Box::new(None)))?;
+            compiler.write_constant(Value::from_none())?;
         }
         compiler.patch_jump(jump_else_idx)
     }
@@ -665,15 +750,24 @@ impl Expression for Array {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let typ = self.get_type()?;  // todo: use this
-        match &self.elements {
+        let len = match &self.elements {
             ArrayElems::Elements(elems) => {
                 for elem in elems.iter() {
                     elem.compile(compiler)?;
                 }
-                compiler.write_array(elems.len() as u16)
+                elems.len() as u16
             },
-            ArrayElems::Empty(_) => compiler.write_array(0),
+            ArrayElems::Empty(_) => 0,
+        };
+        let typ = match self.get_type()? {
+            Type::Array(t) => t,
+            _ => unreachable!()
+        };
+        match typ.as_ref() {
+            Type::Array(_) | Type::String => {
+                compiler.write_array_array(len)
+            },
+            _ => compiler.write_array(len),
         }
     }
 }
@@ -722,11 +816,12 @@ impl Expression for TypeDef {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let fieldnames = self.fields.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-        let typedef = Value::TypeDef(Rc::new(
-            values::TypeDef::new(self.name.clone(), fieldnames)
-        ));
-        compiler.write_constant(typedef)
+        unimplemented!("TypeDef::compile")
+        // let fieldnames = self.fields.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        // let typedef = Value::TypeDef(Rc::new(
+        //     values::TypeDef::new(self.name.clone(), fieldnames)
+        // ));
+        // compiler.write_constant(typedef)
     }
 }
 
@@ -774,10 +869,7 @@ impl Expression for GetField {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let typ = self.get_type()?;  // todo: use this
         self.object.compile(compiler)?;
-        let name = Value::String(Rc::new(
-            self.field.clone()
-        ));
-        compiler.write_constant(name)
+        compiler.write_string(self.field.clone())
     }
 }
 
@@ -828,7 +920,7 @@ impl Expression for Maybe {
                 Ok(())
             },
             MaybeValue::Null(_) => compiler.write_constant(
-                Value::Maybe(Box::new(None))
+                Value::from_none()
             ),
         }
     }
