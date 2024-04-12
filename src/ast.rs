@@ -1,6 +1,6 @@
 use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
-use crate::values::Value;
+use crate::values::{HeapValue, Value};
 use crate::token::TokenType;
 
 // struct CompileError(String);
@@ -28,6 +28,9 @@ impl Type {
             // todo: resolve compound types
             _ => Err(format!("Unknown type {}", s)),
         }
+    }
+    pub fn is_heap(&self) -> bool {
+        matches!(self, Self::String | Self::Array(_) | Self::Maybe(_) | Self::Function(_, _) | Self::Object(_, _))
     }
 }
 
@@ -129,11 +132,14 @@ impl Expression for ASTTopLevel {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         self.child.compile(compiler)?;
-        compiler.write_opcode(match self.get_type()? {
-            Type::Array(_) => OpCode::ReturnArray,
-            Type::String => OpCode::ReturnArray,
-            _ => OpCode::Return,
-        });
+        compiler.write_opcode(
+            if self.get_type()?.is_heap() {
+                OpCode::ReturnHeap
+            }
+            else {
+                OpCode::Return
+            }
+        );
         Ok(())
     }
 }
@@ -180,11 +186,19 @@ impl Expression for Block {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         compiler.begin_scope();
-        for expr in self.expressions.iter() {
-            expr.compile(compiler)?;
-            compiler.write_opcode(OpCode::EndExpr);
+        for e in self.expressions.iter().take(self.expressions.len() - 1) {
+            e.compile(compiler)?;
+            compiler.write_opcode(
+                if e.get_type()?.is_heap() {
+                    OpCode::EndHeapExpr
+                }
+                else {
+                    OpCode::EndExpr
+                }
+            );
         }
-        compiler.end_scope()
+        self.expressions.last().unwrap().compile(compiler)?;
+        compiler.end_scope(self.get_type()?.is_heap())
     }
 }
 
@@ -237,18 +251,21 @@ impl Expression for Function {
         inner_compiler.function.name = self.name.clone();
         inner_compiler.function.arity = self.params.len() as u8;
         for param in self.params.iter() {
-            if inner_compiler.create_variable(param.name.clone(), param.get_type()?)?.is_some() {
+            if inner_compiler.create_variable(param.name.clone(), &param.get_type()?)?.is_some() {
                 return Err(format!(
                     "Function parameters should be in local scope"
                 ));
             }
         }
         self.block.compile(&mut inner_compiler)?;
-        inner_compiler.write_opcode(match self.get_type()? {
-            Type::Array(_) => OpCode::ReturnArray,
-            Type::String => OpCode::ReturnArray,
-            _ => OpCode::Return,
-        });
+        inner_compiler.write_opcode(
+            if self.get_type()?.is_heap() {
+                OpCode::ReturnHeap
+            }
+            else {
+                OpCode::Return
+            }
+        );
         compiler.write_function(inner_compiler)
     }
 }
@@ -582,8 +599,8 @@ impl Expression for Variable {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let typ = self.get_type()?;  // will error if not found
-        compiler.get_variable(self.name.clone())
+        let is_heap = self.get_type()?.is_heap();
+        compiler.get_variable(self.name.clone(), is_heap)
     }
 }
 
@@ -620,9 +637,10 @@ impl Expression for Assignment {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let idx = compiler.create_variable(self.name.clone(), self.value.get_type()?)?;
+        let typ = self.value.get_type()?;
+        let idx = compiler.create_variable(self.name.clone(), &typ)?;
         self.value.compile(compiler)?;
-        compiler.set_variable(idx)
+        compiler.set_variable(idx, typ.is_heap())
     }
 }
 
@@ -646,9 +664,16 @@ impl IfStatement {
 
 impl Expression for IfStatement {
     fn get_type(&self) -> Result<Type, String> {
+        let condition_type = self.condition.get_type()?;
+        if condition_type != Type::Bool {
+            return Err(format!(
+                "If condition must be a boolean, but got {:?}",
+                condition_type
+            ));
+        }
         let then_branch_type = self.then_branch.get_type()?;
         match &self.else_branch {
-            None => Ok(then_branch_type),
+            None => Ok(Type::Maybe(Box::new(then_branch_type))),
             Some(else_branch) => {
                 let else_branch_type = else_branch.get_type()?;
                 if then_branch_type != else_branch_type {
@@ -677,12 +702,18 @@ impl Expression for IfStatement {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let typ = self.get_type()?; // will error if types don't match
+        let typ = self.get_type()?; // will error if types don't match or condition is not a bool
+        let inner_is_heap = match typ {
+            Type::Maybe(t) => t.is_heap(),
+            _ => false,
+        };
         self.condition.compile(compiler)?;
         let jump_if_idx = compiler.write_jump(OpCode::JumpIfFalse)?;
         self.then_branch.compile(compiler)?;
         if self.else_branch.is_none() {
-            compiler.write_opcode(OpCode::WrapSome);
+            compiler.write_opcode(
+                if inner_is_heap { OpCode::WrapHeapSome } else { OpCode::WrapSome }
+            );
         }
         let jump_else_idx = compiler.write_jump(OpCode::Jump)?;
         compiler.patch_jump(jump_if_idx)?;
@@ -690,7 +721,9 @@ impl Expression for IfStatement {
             else_branch.compile(compiler)?;
         }
         else {
-            compiler.write_constant(Value::from_none())?;
+            compiler.write_heap_constant(
+                if inner_is_heap { HeapValue::MaybeHeap(None) } else { HeapValue::Maybe(None) }
+            )?;
         }
         compiler.patch_jump(jump_else_idx)
     }
@@ -896,10 +929,10 @@ impl Maybe {
 
 impl Expression for Maybe {
     fn get_type(&self) -> Result<Type, String> {
-        match &self.value {
-            MaybeValue::Some(e) => e.get_type(),
-            MaybeValue::Null(t) => Ok(t.clone()),
-        }
+        Ok(Type::Maybe(Box::new(match &self.value {
+            MaybeValue::Some(e) => e.get_type()?,
+            MaybeValue::Null(t) => t.clone(),
+        })))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -916,12 +949,22 @@ impl Expression for Maybe {
         match &self.value {
             MaybeValue::Some(e) => {
                 e.compile(compiler)?;
-                compiler.write_opcode(OpCode::WrapSome);
+                if e.get_type()?.is_heap() {
+                    compiler.write_opcode(OpCode::WrapHeapSome);
+                }
+                else {
+                    compiler.write_opcode(OpCode::WrapSome);
+                }
                 Ok(())
             },
-            MaybeValue::Null(_) => compiler.write_constant(
-                Value::from_none()
-            ),
+            MaybeValue::Null(t) => {
+                if t.is_heap() {
+                    compiler.write_heap_constant(HeapValue::MaybeHeap(None))
+                }
+                else {
+                    compiler.write_heap_constant(HeapValue::Maybe(None))
+                }
+            },
         }
     }
 }

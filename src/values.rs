@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::mem::ManuallyDrop;
-use std::ops::{Add, BitAnd, BitOr, Div, Mul, Neg, Not, Sub};
-use std::ptr::null;
 use std::rc::Rc;
 
 use crate::ast;
@@ -212,7 +209,9 @@ pub fn bytes_to_arr(bytes: &[u8]) -> Vec<Value> {
 pub enum HeapValue {
     String(Rc<String>),
     Array(Rc<[Value]>),
-    ArrayArray(Rc<[HeapValue]>),
+    ArrayHeap(Rc<[HeapValue]>),
+    Maybe(Option<Value>),
+    MaybeHeap(Option<Box<HeapValue>>),
 }
 
 #[derive(Debug)]
@@ -222,6 +221,7 @@ pub enum TaggedValue {
     Bool(bool),
     String(String),
     Array(Vec<TaggedValue>),
+    Maybe(Option<Box<TaggedValue>>),
 }
 
 impl Display for TaggedValue {
@@ -241,6 +241,12 @@ impl Display for TaggedValue {
                 }
                 write!(f, "]")
             },
+            TaggedValue::Maybe(maybe) => {
+                match maybe {
+                    Some(v) => write!(f, "Some({})", v),
+                    None => write!(f, "Null"),
+                }
+            }
         }
     }
 }
@@ -267,5 +273,11 @@ impl TaggedValue {
                 _ => unimplemented!(),
             }
         }).collect())
+    }
+    pub fn from_maybe(maybe: Option<Value>, typ: &ast::Type) -> Result<TaggedValue, String> {
+        Ok(match maybe {
+            Some(x) => TaggedValue::Maybe(Some(Box::new(TaggedValue::from_value(x, typ)?))),
+            None => TaggedValue::Maybe(None),
+        })
     }
 }

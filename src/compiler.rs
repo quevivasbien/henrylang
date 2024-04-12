@@ -9,7 +9,7 @@ use crate::values::{Closure, Function, HeapValue, Value};
 
 struct Local {
     name: String,
-    is_array: bool,
+    is_heap: bool,
     depth: i32,
 }
 
@@ -91,6 +91,9 @@ impl Compiler {
     pub fn write_constant(&mut self, value: Value) -> Result<(), String> {
         self.chunk().write_constant(value, 0).map_err(|e| e.to_string())
     }
+    pub fn write_heap_constant(&mut self, value: HeapValue) -> Result<(), String> {
+        self.chunk().write_heap_constant(value, 0).map_err(|e| e.to_string())
+    }
     pub fn write_string(&mut self, s: String) -> Result<(), String> {
         let s = HeapValue::String(Rc::new(s));
         self.chunk().write_heap_constant(s, 0).map_err(|e| e.to_string())
@@ -118,60 +121,57 @@ impl Compiler {
     pub fn begin_scope(&mut self) {
         self.locals.scope_depth += 1;
     }
-    pub fn end_scope(&mut self) -> Result<(), String> {
+    pub fn end_scope(&mut self, is_heap: bool) -> Result<(), String> {
         self.locals.scope_depth -= 1;
         let mut n_pops = 0;
-        let mut n_array_pops = 0;
+        let mut n_heap_pops = 0;
         while let Some(local) = self.locals.locals.last() {
             if local.depth <= self.locals.scope_depth {
                 break;
             }
-            if local.is_array {
-                n_array_pops += 1;
+            if local.is_heap {
+                n_heap_pops += 1;
             }
             else {
                 n_pops += 1;
             }
             self.locals.locals.pop();
         }
-        self.chunk().write_endblock(n_pops, n_array_pops, 0).map_err(|e| e.to_string())
+        self.chunk().write_endblock(n_pops, n_heap_pops, is_heap, 0).map_err(|e| e.to_string())
     }
 
-    pub fn create_variable(&mut self, name: String, typ: ast::Type) -> Result<Option<u16>, String> {
+    pub fn create_variable(&mut self, name: String, typ: &ast::Type) -> Result<Option<u16>, String> {
         if self.locals.scope_depth == 0 {
             // create a global variable
             let name_hv = HeapValue::String(Rc::new(name.clone()));
             return match self.chunk().create_heap_constant(name_hv) {
                 Ok(idx) => {
-                    self.typecontext.borrow_mut().insert(name, typ);
+                    self.typecontext.borrow_mut().insert(name, typ.clone());
                     Ok(Some(idx))
                 },
                 Err(e) => return Err(e.to_string()),
             };
         }
         // create a local variable
-        let is_array = match typ {
-            ast::Type::Array(_) => true,
-            ast::Type::String => true,
-            _ => false,
-        };
         let local = Local {
             name,
-            is_array,
+            is_heap: typ.is_heap(),
             depth: self.locals.scope_depth,
         };
         self.locals.push(local).map_err(|e| e.to_string())?;
         Ok(None)
     }
-    pub fn set_variable(&mut self, idx: Option<u16>) -> Result<(), String> {
+    pub fn set_variable(&mut self, idx: Option<u16>, is_heap: bool) -> Result<(), String> {
         match idx {
             // set global
             Some(idx) => {
-                self.chunk().write_set_global(idx, 0).map_err(|e| e.to_string())
+                self.chunk().write_set_global(idx, is_heap, 0).map_err(|e| e.to_string())
             },
             // set local
             None => {
-                Ok(self.write_opcode(OpCode::SetLocal))
+                Ok(self.write_opcode(
+                    if is_heap { OpCode::SetHeapLocal } else { OpCode::SetLocal }
+                ))
             }
         }
     }
@@ -210,16 +210,16 @@ impl Compiler {
         Ok(None)
     }
 
-    pub fn get_variable(&mut self, name: String) -> Result<(), String> {
+    pub fn get_variable(&mut self, name: String, is_heap: bool) -> Result<(), String> {
         let local_idx = self.locals.get_idx(&name);
         let res = if let Some(idx) = local_idx {
-            self.chunk().write_get_local(idx, 0)
+            self.chunk().write_get_local(idx, is_heap, 0)
         }
         else if let Some(idx) = self.resolve_upvalue(&name)? {
             self.chunk().write_get_upvalue(idx, 0)
         }
         else {
-            self.chunk().write_get_global(name, 0)
+            self.chunk().write_get_global(name, is_heap, 0)
         };
         res.map_err(|e| e.to_string())
     }

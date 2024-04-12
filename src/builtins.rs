@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use lazy_static::lazy_static;
 
 use crate::ast::Type;
-use crate::values::{NativeFunction, Value};
+use crate::values::{NativeFunction, HeapValue, Value};
 
 lazy_static! {
     // static ref PRINT: NativeFunction = NativeFunction {
@@ -911,5 +912,10 @@ pub fn builtins() -> HashMap<String, Value> {
     // map.insert("take".to_string(), Value::NativeFunction(&TAKE));
     // map.insert("skip".to_string(), Value::NativeFunction(&SKIP));
 
+    map
+}
+
+pub fn heap_builtins() -> HashMap<String, HeapValue> {
+    let mut map = HashMap::new();
     map
 }

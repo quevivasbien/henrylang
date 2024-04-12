@@ -3,13 +3,13 @@ use std::rc::Rc;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use crate::compiler;
-use crate::values::{bytes_to_arr, HeapValue, Value};
+use crate::values::{HeapValue, Value};
 
 #[derive(Debug, PartialEq)]
 #[repr(u8)]
 pub enum OpCode {
     Return,
-    ReturnArray,
+    ReturnHeap,
     
     // Constants
     True,
@@ -62,22 +62,29 @@ pub enum OpCode {
     Not,
 
     EndExpr,
+    EndHeapExpr,
     EndBlock,
+    EndHeapBlock,
     Jump,
     JumpIfFalse,
     Call,
     Array,
-    ArrayArray,
+    ArrayHeap,
     Map,
 
     SetGlobal,
+    SetHeapGlobal,
     GetGlobal,
+    GetHeapGlobal,
     SetLocal,
+    SetHeapLocal,
     GetLocal,
+    GetHeapLocal,
     Closure,
     GetUpvalue,
 
     WrapSome,
+    WrapHeapSome,
 }
 
 impl From<u8> for OpCode {
@@ -170,19 +177,28 @@ impl Chunk {
         // Ok(())
     }
 
-    pub fn write_set_global(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::SetGlobal, line);
+    pub fn write_set_global(&mut self, idx: u16, is_heap: bool, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(
+            if is_heap { OpCode::SetHeapGlobal } else { OpCode::SetGlobal },
+            line
+        );
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable to bytes")
     }
-    pub fn write_get_global(&mut self, name: String, line: usize) -> Result<(), &'static str> {
+    pub fn write_get_global(&mut self, name: String, is_heap: bool, line: usize) -> Result<(), &'static str> {
         let name = HeapValue::String(Rc::new(name));
         let idx = self.create_heap_constant(name)?;
-        self.write_opcode(OpCode::GetGlobal, line);
+        self.write_opcode(
+            if is_heap { OpCode::GetHeapGlobal } else { OpCode::GetGlobal },
+            line
+        );
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of global variable name to bytes")
     }
 
-    pub fn write_get_local(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::GetLocal, line);
+    pub fn write_get_local(&mut self, idx: u16, is_heap: bool, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(
+            if is_heap { OpCode::GetHeapLocal } else { OpCode::GetLocal },
+            line
+        );
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of local variable to bytes")
     }
 
@@ -191,8 +207,11 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of upvalue to bytes")
     }
 
-    pub fn write_endblock(&mut self, n_pops: u16, n_heap_pops: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::EndBlock, line);
+    pub fn write_endblock(&mut self, n_pops: u16, n_heap_pops: u16, is_heap: bool, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(
+            if is_heap { OpCode::EndHeapBlock } else { OpCode::EndBlock },
+            line
+        );
         self.bytes.write_u16::<BigEndian>(n_pops).map_err(|_| "Failed to write number of pops to bytes")?;
         self.bytes.write_u16::<BigEndian>(n_heap_pops).map_err(|_| "Failed to write number of heap pops to bytes")
     }
@@ -223,7 +242,7 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
     }
     pub fn write_array_array(&mut self, num_elems: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::ArrayArray, line);
+        self.write_opcode(OpCode::ArrayHeap, line);
         self.bytes.write_u16::<BigEndian>(num_elems).map_err(|_| "Failed to write number of elements to bytes")
     }
 
@@ -269,13 +288,78 @@ impl Chunk {
             },
             OpCode::HeapConstant => {
                 let constant = self.read_heap_constant(ip);
-                println!("{:04} HeapConstant {:#x?}", ip0, constant);
+                println!("{:04} HeapConstant {:?}", ip0, constant);
             },
             OpCode::EndBlock => {
                 let n_pops = self.read_u16(ip);
                 let n_heap_pops = self.read_u16(ip);
                 println!("{:04} EndBlock {:?} {:?}", ip0, n_pops, n_heap_pops);
-            }
+            },
+            OpCode::EndHeapBlock => {
+                let n_pops = self.read_u16(ip);
+                let n_heap_pops = self.read_u16(ip);
+                println!("{:04} EndHeapBlock {:?} {:?}", ip0, n_pops, n_heap_pops);
+            },
+            OpCode::Jump => {
+                let offset = self.read_u16(ip);
+                println!("{:04} Jump {:?}", ip0, offset);
+            },
+            OpCode::JumpIfFalse => {
+                let offset = self.read_u16(ip);
+                println!("{:04} JumpIfFalse {:?}", ip0, offset);
+            },
+            OpCode::Array => {
+                let num_elems = self.read_u16(ip);
+                println!("{:04} Array {}", ip0, num_elems);
+            },
+            OpCode::ArrayHeap => {
+                let num_elems = self.read_u16(ip);
+                println!("{:04} ArrayArray {}", ip0, num_elems);
+            },
+            OpCode::SetGlobal => {
+                let name = match self.read_heap_constant(ip) {
+                    HeapValue::String(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                println!("{:04} SetGlobal {}", ip0, name);
+            },
+            OpCode::SetHeapGlobal => {
+                let name = match self.read_heap_constant(ip) {
+                    HeapValue::String(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                println!("{:04} SetHeapGlobal {}", ip0, name);
+            },
+            OpCode::GetGlobal => {
+                let name = match self.read_heap_constant(ip) {
+                    HeapValue::String(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                println!("{:04} GetGlobal {}", ip0, name);
+            },
+            OpCode::GetHeapGlobal => {
+                let name = match self.read_heap_constant(ip) {
+                    HeapValue::String(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                println!("{:04} GetHeapGlobal {}", ip0, name);
+            },
+            OpCode::SetLocal => {
+                let idx = self.read_u16(ip);
+                println!("{:04} SetLocal {}", ip0, idx);
+            },
+            OpCode::SetHeapLocal => {
+                let idx = self.read_u16(ip);
+                println!("{:04} SetHeapLocal {}", ip0, idx);
+            },
+            OpCode::GetLocal => {
+                let idx = self.read_u16(ip);
+                println!("{:04} GetLocal {}", ip0, idx);
+            },
+            OpCode::GetHeapLocal => {
+                let idx = self.read_u16(ip);
+                println!("{:04} GetHeapLocal {}", ip0, idx);
+            },
             x => println!("{:04} {:?}", ip0, x),
         }
     }

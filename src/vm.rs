@@ -28,11 +28,12 @@ pub struct CallFrame {
     closure: Box<Closure>,
     ip: usize,
     stack_idx: usize,
+    heap_stack_idx: usize,
 }
 
 impl CallFrame {
-    fn new(closure: Box<Closure>, stack_idx: usize) -> Self {
-        Self { closure, ip: 0, stack_idx }
+    fn new(closure: Box<Closure>, stack_idx: usize, heap_stack_idx: usize) -> Self {
+        Self { closure, ip: 0, stack_idx, heap_stack_idx }
     }
 }
 
@@ -45,9 +46,8 @@ enum ReturnValue {
 pub struct VM {
     pub stack: Vec<Value>,
     pub heap_stack: Vec<HeapValue>,
-    pub last_value: Option<Value>,
-    pub last_heap_value: Option<HeapValue>,
     pub globals: HashMap<String, Value>,
+    pub heap_globals: HashMap<String, HeapValue>,
     pub frames: Vec<CallFrame>,
     pub typecontext: compiler::TypeContext,
 }
@@ -57,9 +57,8 @@ impl VM {
         Self {
             stack: Vec::new(),
             heap_stack: Vec::new(),
-            last_value: None,
-            last_heap_value: None,
-            globals: builtins(),
+            globals: builtins::builtins(),
+            heap_globals: builtins::heap_builtins(),
             frames: Vec::new(),
             typecontext: Rc::new(RefCell::new(builtins::builtin_types())),
         }
@@ -67,7 +66,7 @@ impl VM {
 
     fn init(&mut self, function: Rc<Function>) {
         let closure = Box::new(Closure::new(function));
-        let frame = CallFrame::new(closure, 0);
+        let frame = CallFrame::new(closure, 0, 0);
         self.frames.push(frame);
     }
 
@@ -265,27 +264,21 @@ impl VM {
                 print!("stack: {:?}, ", &self.stack[self.frame().stack_idx..]);
                 print!("heap_stack: {:?}, ", &self.heap_stack[self.frame().stack_idx..]);
                 print!("globals: {:?}, ", self.globals);
-                print!("last_value: {:?}, ", self.last_value);
-                println!("last_heap_value: {:?}", self.last_heap_value);
+                print!("heap globals: {:?}, ", self.heap_globals);
                 let mut ip_copy = self.frame().ip;
                 self.chunk().disassemble_instruction(&mut ip_copy);
             }
             let opcode = OpCode::from(self.read_u8());
             match opcode {
                 OpCode::Return => {
-                    // clear stack
-                    self.stack.pop();
                     // pop function
                     self.frames.pop();
-                    return Ok(ReturnValue::Value(self.last_value.unwrap()));
+                    return Ok(ReturnValue::Value(self.stack.pop().unwrap()));
                 },
-                OpCode::ReturnArray => {
-                    // clear stack
-                    self.heap_stack.pop();
-                    self.stack.pop();
+                OpCode::ReturnHeap => {
                     // pop function
                     self.frames.pop();
-                    return Ok(ReturnValue::HeapValue(self.last_heap_value.clone().unwrap()));
+                    return Ok(ReturnValue::HeapValue(self.heap_stack.pop().unwrap()));
                 },
 
 
@@ -344,31 +337,35 @@ impl VM {
                             let new_string = Rc::from(format!("{}{}", l, r));
                             self.heap_stack.push(HeapValue::String(new_string));
                         },
-                        (HeapValue::ArrayArray(r), HeapValue::ArrayArray(l)) => {
+                        (HeapValue::ArrayHeap(r), HeapValue::ArrayHeap(l)) => {
                             let new_arr = Rc::from([l, r].concat());
-                            self.heap_stack.push(HeapValue::ArrayArray(new_arr));
+                            self.heap_stack.push(HeapValue::ArrayHeap(new_arr));
                         },
                         (r, l) => panic!("Expected two arrays or array-likes of same type on heap stack, got {:?} and {:?}", r, l)
                     };
                 },
                 
                 OpCode::EndExpr => {
-                    self.last_value = self.stack.pop();
-                    self.last_heap_value = self.heap_stack.pop();
+                    self.stack.pop();
+                },
+                OpCode::EndHeapExpr => {
+                    self.heap_stack.pop();
                 },
                 OpCode::EndBlock => {
                     let n_pops = self.read_u16();
-                    let n_array_pops = self.read_u16();
-                    // println!("stack: {:?}, n_pops: {}", self.stack, n_pops);
-                    // println!("array stack: {:?}, n_array_pops: {}", self.heap_stack, n_array_pops);
+                    let n_heap_pops = self.read_u16();
+                    let last_value = self.stack.pop().expect("Attempted to end block with nothing on the stack");
                     self.stack.truncate(self.stack.len() - n_pops as usize);
-                    self.heap_stack.truncate(self.heap_stack.len() - n_array_pops as usize);
-                    if let Some(x) = &self.last_value {
-                        self.stack.push(*x);
-                    }
-                    if let Some(x) = &self.last_heap_value {
-                        self.heap_stack.push(x.clone());
-                    }
+                    self.heap_stack.truncate(self.heap_stack.len() - n_heap_pops as usize);
+                    self.stack.push(last_value);
+                },
+                OpCode::EndHeapBlock => {
+                    let n_pops = self.read_u16();
+                    let n_heap_pops = self.read_u16();
+                    let last_value = self.heap_stack.pop().expect("Attempted to end block with nothing on the stack");
+                    self.stack.truncate(self.stack.len() - n_pops as usize);
+                    self.heap_stack.truncate(self.heap_stack.len() - n_heap_pops as usize);
+                    self.heap_stack.push(last_value);
                 },
                 OpCode::Jump => {
                     let offset = self.read_u16();
@@ -379,7 +376,7 @@ impl VM {
                     let offset = self.read_u16();
                     let condition = match self.stack.pop() {
                         Some(x) => x,
-                        None => panic!("Attempted to jump with null condition"),
+                        None => unreachable!("Attempted to jump with null condition"),
                     };
                     let condition = unsafe { condition.b };
                     if !condition {
@@ -402,10 +399,10 @@ impl VM {
                     let arr = Rc::from(self.stack.split_off(self.stack.len() - n_elems as usize));
                     self.heap_stack.push(HeapValue::Array(arr));
                 },
-                OpCode::ArrayArray => {
+                OpCode::ArrayHeap => {
                     let n_elems = self.read_u16();
                     let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - n_elems as usize));
-                    self.heap_stack.push(HeapValue::ArrayArray(arr));
+                    self.heap_stack.push(HeapValue::ArrayHeap(arr));
                 }
                 // OpCode::Map => {
                 //     let args = self.stack.split_off(self.stack.len() - 2);
@@ -413,39 +410,74 @@ impl VM {
                 //     self.stack.push(result);
                 // },
                 
-                // OpCode::SetGlobal => {
-                //     let name = self.read_constant();
-                //     let name = unsafe { name.s };
-                //     let value = match self.stack.last() {
-                //         Some(x) => x.clone(),
-                //         None => panic!("Attempted to set global with empty stack"),
-                //     };
-                //     self.globals.insert(name.as_ref().clone(), value);
-                // },
-                // OpCode::GetGlobal => {
-                //     let name = match self.read_constant() {
-                //         Value::String(name) => name.clone(),
-                //         _ => unreachable!("Global name was not a string"),
-                //     };
-                //     match self.globals.get(name.as_ref()) {
-                //         Some(x) => self.stack.push(x.clone()),
-                //         None => return Err(self.runtime_err(
-                //             format!("Could not find global variable with name {}", name)
-                //         )),
-                //     };
-                // }
-                // OpCode::SetLocal => {
-                //     let value = self.stack.last();
-                //     match value {
-                //         Some(x) => self.stack.push(x.clone()),
-                //         None => panic!("Attempted to set local with empty stack"),
-                //     }
-                // },
-                // OpCode::GetLocal => {
-                //     let idx = self.read_u16();
-                //     let value = self.stack[self.frame().stack_idx + idx as usize].clone();
-                //     self.stack.push(value);
-                // },
+                OpCode::SetGlobal => {
+                    let name = self.read_heap_constant();
+                    let name = match name {
+                        HeapValue::String(name) => name.as_ref().clone(),
+                        _ => unreachable!("Global name was not a string"),
+                    };
+                    let value = match self.stack.last() {
+                        Some(x) => x.clone(),
+                        None => panic!("Attempted to set global with empty stack"),
+                    };
+                    self.globals.insert(name, value);
+                },
+                OpCode::SetHeapGlobal => {
+                    let name = self.read_heap_constant();
+                    let name = match name {
+                        HeapValue::String(name) => name.as_ref().clone(),
+                        _ => unreachable!("Global name was not a string"),
+                    };
+                    let value = match self.heap_stack.last() {
+                        Some(x) => x.clone(),
+                        None => panic!("Attempted to set global with empty stack"),
+                    };
+                    self.heap_globals.insert(name, value);
+                }
+                OpCode::GetGlobal => {
+                    let name = match self.read_heap_constant() {
+                        HeapValue::String(name) => name.clone(),
+                        _ => unreachable!("Global name was not a string"),
+                    };
+                    match self.globals.get(name.as_ref()) {
+                        Some(x) => self.stack.push(*x),
+                        None => unreachable!("Attempted to get global that does not exist"),
+                    };
+                },
+                OpCode::GetHeapGlobal => {
+                    let name = match self.read_heap_constant() {
+                        HeapValue::String(name) => name.clone(),
+                        _ => unreachable!("Global name was not a string"),
+                    };
+                    match self.heap_globals.get(name.as_ref()) {
+                        Some(x) => self.heap_stack.push(x.clone()),
+                        None => unreachable!("Attempted to get global that does not exist"),
+                    };
+                }
+                OpCode::SetLocal => {
+                    let value = self.stack.last();
+                    match value {
+                        Some(x) => self.stack.push(*x),
+                        None => unreachable!("Attempted to set local with empty stack"),
+                    }
+                },
+                OpCode::SetHeapLocal => {
+                    let value = self.heap_stack.last();
+                    match value {
+                        Some(x) => self.heap_stack.push(x.clone()),
+                        None => unreachable!("Attempted to set local with empty stack"),
+                    }
+                },
+                OpCode::GetLocal => {
+                    let idx = self.read_u16();
+                    let value = self.stack[self.frame().stack_idx + idx as usize].clone();
+                    self.stack.push(value);
+                },
+                OpCode::GetHeapLocal => {
+                    let idx = self.read_u16();
+                    let value = self.heap_stack[self.frame().heap_stack_idx + idx as usize].clone();
+                    self.heap_stack.push(value);
+                },
                 // OpCode::Closure => {
                 //     let mut closure = match self.read_constant() {
                 //         Value::Closure(c) => c.clone(),
@@ -468,10 +500,14 @@ impl VM {
                 //     let value = self.frame().closure.upvalues[idx as usize].clone();
                 //     self.stack.push(value);
                 // },
-                // OpCode::WrapSome => {
-                //     let value = self.stack.pop().expect("Attempted to wrap with empty stack");
-                //     self.stack.push(Value::Maybe(Box::new(Some(value))));
-                // },
+                OpCode::WrapSome => {
+                    let value = self.stack.pop().expect("Attempted to wrap with empty stack");
+                    self.heap_stack.push(HeapValue::Maybe(Some(value)));
+                },
+                OpCode::WrapHeapSome => {
+                    let value = self.heap_stack.pop().expect("Attempted to wrap with empty stack");
+                    self.heap_stack.push(HeapValue::MaybeHeap(Some(Box::new(value))));
+                },
                 _ => unimplemented!("Opcode {:?} not implemented", opcode),
             }
         }
@@ -511,8 +547,14 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
         },
         (HeapValue::String(s), ast::Type::String) => {
             Ok(TaggedValue::String(s.as_ref().clone()))
-        }
-        (HeapValue::ArrayArray(arr), ast::Type::Array(typ)) => {
+        },
+        (HeapValue::Maybe(x), ast::Type::Maybe(typ)) => {
+            TaggedValue::from_maybe(x, typ.as_ref())
+        },
+        (HeapValue::MaybeHeap(x), ast::Type::Maybe(typ)) => {
+            unimplemented!("unpack_heapvalue: MaybeHeap")
+        },
+        (HeapValue::ArrayHeap(arr), ast::Type::Array(typ)) => {
             match typ.as_ref() {
                 ast::Type::String => {
                     let mut arr_s = Vec::new();
