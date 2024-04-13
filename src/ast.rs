@@ -1,4 +1,4 @@
-use std::any::Any;
+use downcast_rs::{impl_downcast, Downcast};
 
 use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
@@ -27,7 +27,7 @@ impl Type {
             "Float" => Ok(Self::Float),
             "String" => Ok(Self::String),
             "Bool" => Ok(Self::Bool),
-            // todo: resolve compound types
+            // Cannot resolve compound types with this method
             _ => Err(format!("Unknown type {}", s)),
         }
     }
@@ -51,22 +51,19 @@ impl VarType {
 #[derive(Debug)]
 pub struct NameAndType {
     name: String,
-    typename: String,
+    typ: TypeAnnotation,
 }
 
 impl NameAndType {
-    pub fn new(name: String, typename: String) -> Self {
-        Self { name, typename }
+    pub fn new(name: String, typ: TypeAnnotation) -> Self {
+        Self { name, typ }
     }
     fn get_type(&self) -> Result<Type, String> {
-        Type::from_str(self.typename.as_str())
-    }
-    fn vartype(&self) -> VarType {
-        VarType::new(self.name.clone(), self.get_type().unwrap())
+        self.typ.get_type()
     }
 }
 
-pub trait Expression: std::fmt::Debug {
+pub trait Expression: std::fmt::Debug + Downcast {
     fn get_type(&self) -> Result<Type, String>;
 
     // set parent should set the parent for this expression,
@@ -75,12 +72,16 @@ pub trait Expression: std::fmt::Debug {
     fn get_parent(&self) -> Option<*const dyn Expression>;
     // get a list of variables and their types that are defined in this expression
     // will stop looking if the given expression if reached
-    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
-        None
+    #[allow(unused_variables)]
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Result<Option<Type>, String> {
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
 }
+
+impl_downcast!(Expression);
+
 
 #[derive(Debug)]
 pub struct ErrorExpression;
@@ -127,13 +128,13 @@ impl Expression for ASTTopLevel {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         None
     }
-    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Option<Type> {
+    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Result<Option<Type>, String> {
         for t in self.types.iter() {
             if &t.name == name {
-                return Some(t.typ.clone());
+                return Ok(Some(t.typ.clone()));
             }
         }
-        None
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -149,6 +150,58 @@ impl Expression for ASTTopLevel {
         Ok(())
     }
 }
+
+#[derive(Debug)]
+pub struct TypeAnnotation {
+    typename: String,
+    children: Vec<TypeAnnotation>,
+}
+
+impl TypeAnnotation {
+    pub fn new(typename: String, children: Vec<TypeAnnotation>) -> Self {
+        Self { typename, children }
+    }
+
+    fn get_type(&self) -> Result<Type, String> {
+        if self.children.is_empty() {
+            return Type::from_str(self.typename.as_str())
+        }
+        let child_types = self.children.iter().map(|a| a.get_type()).collect::<Result<Vec<Type>, String>>()?;
+        match self.typename.as_str() {
+            "Function" => {
+                if child_types.len() < 1 {
+                    return Err(format!(
+                        "Function must be annotated with at least a return type"
+                    ));
+                }
+                Ok(Type::Function(
+                    child_types[..child_types.len()-1].to_vec(),
+                    Box::new(child_types[child_types.len()-1].clone())
+                ))
+            },
+            "Array" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Array must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Array(Box::new(child_types[0].clone())))
+            },
+            "Maybe" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Maybe must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Maybe(Box::new(child_types[0].clone())))
+            },
+            _ => unimplemented!("Unknown type annotation: {}", self.typename)
+        }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct Block {
@@ -179,16 +232,16 @@ impl Expression for Block {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Result<Option<Type>, String> {
         for e in self.expressions.iter() {
             if e.as_ref() as *const _ as *const () == upto as *const () {
                 break;
             }
-            if let Some(t) = e.find_vartype(name, upto) {
-                return Some(t);
+            if let Some(t) = e.find_vartype(name, upto)? {
+                return Ok(Some(t));
             };
         }
-        None
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -213,13 +266,15 @@ impl Expression for Block {
 pub struct Function {
     name: String,
     params: Vec<NameAndType>,
-    pub block: Box<dyn Expression>,
+    block: Box<dyn Expression>,
+    // return type will be inferred if not explicitly provided
+    rtype: Option<TypeAnnotation>,
     parent: Option<*const dyn Expression>,
 }
 
 impl Function {
-    pub fn new(name: String, params: Vec<NameAndType>, block: Box<dyn Expression>) -> Self {
-        Self { name, params, block, parent: None }
+    pub fn new(name: String, params: Vec<NameAndType>, rtype: Option<TypeAnnotation>, block: Box<dyn Expression>) -> Self {
+        Self { name, params, block, rtype, parent: None }
     }
 
     fn param_types(&self) -> Result<Vec<Type>, String> {
@@ -229,8 +284,14 @@ impl Function {
         }
         Ok(param_types)
     }
-    fn param_vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
-        self.params.iter().map(|p| p.vartype()).collect()
+
+    fn explicit_type(&self) -> Result<Option<Type>, String> {
+        let return_type = match &self.rtype {
+            None => return Ok(None),
+            Some(rtype) => rtype.get_type()?,
+        };
+        let param_types = self.param_types()?;
+        Ok(Some(Type::Function(param_types, Box::new(return_type))))
     }
 }
 
@@ -238,6 +299,12 @@ impl Expression for Function {
     fn get_type(&self) -> Result<Type, String> {
         let param_types = self.param_types()?;
         let return_type = self.block.get_type()?;
+        if let Some(rtype) = &self.rtype {
+            let rtype = rtype.get_type()?;
+            if rtype != return_type {
+                return Err(format!("Function return type {:?} does not match type {:?} specified in type annotation", return_type, rtype));
+            }
+        }
         Ok(Type::Function(param_types, Box::new(return_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
@@ -248,14 +315,14 @@ impl Expression for Function {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
+    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Result<Option<Type>, String> {
         // vartypes in block should have been already processed, since block is a child of function
         for p in self.params.iter() {
             if &p.name == name {
-                return Some(p.get_type().unwrap());
+                return Ok(Some(p.get_type()?));
             }
         }
-        None
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -420,6 +487,7 @@ impl Expression for Binary {
             | TokenType::LEq
             | TokenType::GT
             | TokenType::LT => Ok(Type::Bool),
+            TokenType::To => Ok(Type::Array(Box::new(Type::Int))),
             _ => self.left.get_type(),
         }
     }
@@ -558,7 +626,7 @@ impl Expression for Call {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let callee_type = self.callee.get_type()?;
-        let (paramtypes, return_type) = match callee_type {
+        let (paramtypes, _return_type) = match callee_type {
             Type::Function(argtypes, return_type) => (argtypes, *return_type),
             _ => return Err(format!(
                 "Cannot call an expression of type {:?}", callee_type
@@ -611,7 +679,7 @@ impl Expression for Variable {
                 ));
             }
             let typ = unsafe { (*e).find_vartype(&self.name, last_e) };
-            if let Some(typ) = typ {
+            if let Some(typ) = typ? {
                 return Ok(typ);
             }
         }
@@ -654,14 +722,29 @@ impl Expression for Assignment {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
-        if self.value.as_ref() as *const _ as *const () == upto as *const () {
-            return None;
-        }
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Result<Option<Type>, String> {
         if &self.name == name {
-            return Some(self.value.get_type().unwrap());
+            if self.value.as_ref() as *const _ as *const () == upto as *const () {
+                // recursive definition, not allowed except for annotated functions
+                return match self.value.downcast_ref::<Function>() {
+                    Some(f) => match f.explicit_type()? {
+                        Some(t) => Ok(Some(t)),
+                        None => Err(format!(
+                            "Variable {} is defined recursively. This is allowed for functions, but the function must have an explicit return type annotation",
+                            self.name
+                        ))
+                    },
+                    None => Err(format!(
+                        "Variable {} is defined recursively, which is not allowed for non-function types",
+                        self.name
+                    )),
+                }
+            }
+            else {
+                return Ok(Some(self.value.get_type()?));
+            }
         }
-        None
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -773,8 +856,8 @@ impl Array {
     pub fn new(elements: Vec<Box<dyn Expression>>) -> Self {
         Self { elements: ArrayElems::Elements(elements), parent: None }
     }
-    pub fn new_empty(typename: String) -> Result<Self, String> {
-        let typ = Type::from_str(typename.as_str())?;
+    pub fn new_empty(typ: TypeAnnotation) -> Result<Self, String> {
+        let typ = typ.get_type()?;
         Ok(Self { elements: ArrayElems::Empty(typ), parent: None })
     }
 }
@@ -852,9 +935,6 @@ impl TypeDef {
         }
         Ok(field_types)
     }
-    fn field_vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
-        self.fields.iter().map(|p| p.vartype()).collect()
-    }
 }
 
 impl Expression for TypeDef {
@@ -872,13 +952,13 @@ impl Expression for TypeDef {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Option<Type> {
+    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Result<Option<Type>, String> {
         for f in self.fields.iter() {
             if &f.name == name {
-                return Some(f.get_type().unwrap());
+                return Ok(Some(f.get_type()?));
             }
         }
-        None
+        Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {

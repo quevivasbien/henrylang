@@ -9,12 +9,12 @@ use crate::values::{Closure, Function, HeapValue, Value};
 
 struct Local {
     name: String,
-    is_heap: bool,
     depth: i32,
 }
 
 struct LocalData {
     locals: Vec<Local>,
+    heap_locals: Vec<Local>,
     scope_depth: i32,
 }
 
@@ -22,21 +22,38 @@ impl Default for LocalData {
     fn default() -> Self {
         Self {
             locals: Vec::new(),
+            heap_locals: Vec::new(),
             scope_depth: -1,
         }
     }
 }
 
 impl LocalData {
-    fn push(&mut self, local: Local) -> Result<(), &'static str> {
-        self.locals.push(local);
-        if self.locals.len() == u16::MAX as usize {
-            return Err("Too many locals declared in current function");
+    fn push(&mut self, local: Local, is_heap: bool) -> Result<(), &'static str> {
+        if is_heap {
+            self.heap_locals.push(local);
+            if self.heap_locals.len() == u16::MAX as usize {
+                return Err("Too many heap locals declared in current function");
+            }
+        }
+        else {
+            self.locals.push(local);
+            if self.locals.len() == u16::MAX as usize {
+                return Err("Too many locals declared in current function");
+            }
         }
         Ok(())
     }
 
-    fn get_idx(&self, name: &str) -> Option<u16> {
+    fn get_idx(&self, name: &str, is_heap: bool) -> Option<u16> {
+        if is_heap {
+            for (i, local) in self.heap_locals.iter().enumerate().rev() {
+                if local.name == name {
+                    return Some(i as u16);
+                }
+            }
+            return None;
+        }
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.name == name {
                 return Some(i as u16);
@@ -128,13 +145,19 @@ impl Compiler {
             if local.depth <= self.locals.scope_depth {
                 break;
             }
-            if local.is_heap {
-                n_heap_pops += 1;
-            }
             else {
                 n_pops += 1;
             }
             self.locals.locals.pop();
+        }
+        while let Some(local) = self.locals.heap_locals.last() {
+            if local.depth <= self.locals.scope_depth {
+                break;
+            }
+            else {
+                n_heap_pops += 1;
+            }
+            self.locals.heap_locals.pop();
         }
         self.chunk().write_endblock(n_pops, n_heap_pops, is_heap, 0).map_err(|e| e.to_string())
     }
@@ -154,10 +177,9 @@ impl Compiler {
         // create a local variable
         let local = Local {
             name,
-            is_heap: typ.is_heap(),
             depth: self.locals.scope_depth,
         };
-        self.locals.push(local).map_err(|e| e.to_string())?;
+        self.locals.push(local, typ.is_heap()).map_err(|e| e.to_string())?;
         Ok(None)
     }
     pub fn set_variable(&mut self, idx: Option<u16>, is_heap: bool) -> Result<(), String> {
@@ -214,7 +236,7 @@ impl Compiler {
         let parent = unsafe { &mut *self.parent };
         
         // look for upvalue as local in parent scope
-        if let Some(idx) = parent.locals.get_idx(name) {
+        if let Some(idx) = parent.locals.get_idx(name, is_heap) {
             return Ok(Some(self.add_upvalue(idx, true, is_heap)?));
         }
 
@@ -228,7 +250,7 @@ impl Compiler {
     }
 
     pub fn get_variable(&mut self, name: String, is_heap: bool) -> Result<(), String> {
-        let local_idx = self.locals.get_idx(&name);
+        let local_idx = self.locals.get_idx(&name, is_heap);
         let res = if let Some(idx) = local_idx {
             self.chunk().write_get_local(idx, is_heap, 0)
         }

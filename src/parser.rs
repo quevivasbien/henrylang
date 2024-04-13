@@ -399,6 +399,24 @@ impl Parser {
         }
     }
 
+    fn type_annotation(&mut self) -> Result<ast::TypeAnnotation, String> {
+        let typename = self.current_token();
+        if typename.ttype != TokenType::Ident {
+            return Err(format!("In type annotation, expected identifier, but found {} instead.", typename.text));
+        }
+        let typename = typename.text.clone();
+        self.advance();
+        let mut children = Vec::new();
+        if self.consume_if_match(TokenType::LParen) {
+            while !self.consume_if_match(TokenType::RParen) {
+                children.push(self.type_annotation()?);
+                self.consume_if_match(TokenType::Comma);
+            }
+        }
+        Ok(ast::TypeAnnotation::new(typename, children))
+
+    }
+
     fn grouping(&mut self) -> Box<dyn ast::Expression> {
         if self.consume_if_match(TokenType::RParen) {
             self.error(Some(
@@ -468,14 +486,14 @@ impl Parser {
             self.consume(TokenType::Colon, format!(
                 "Missing type annotation for parameter {}.", name
             ));
-            let typename = self.current_token().clone();
-            if typename.ttype != TokenType::Ident {
-                self.error(Some(
-                    format!("In function definition, expected parameter type but found {} instead.", typename.text)
-                ))
+            let typ = match self.type_annotation() {
+                Ok(type_annotation) => type_annotation,
+                Err(e) => {
+                    self.error(Some(e));
+                    return Box::new(ast::ErrorExpression{});
+                }
             };
-            self.advance();
-            params.push(ast::NameAndType::new(name, typename.text));
+            params.push(ast::NameAndType::new(name, typ));
             if params.len() > u8::MAX as usize {
                 self.error(Some(
                     format!("Too many parameters in function definition.")
@@ -485,13 +503,26 @@ impl Parser {
             // comma is optional between parameter names
             self.consume_if_match(TokenType::Comma);
         }
+        // optional type annotation for return type
+        let return_type = if self.consume_if_match(TokenType::Colon) {
+            Some(match self.type_annotation() {
+                Ok(type_annotation) => type_annotation,
+                Err(e) => {
+                    self.error(Some(e));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            })
+        }
+        else {
+            None
+        };
         self.consume(TokenType::LBrace, "Expected '{' after function parameters.".to_string());
         let body = self.block();
         let name = match &self.last_name {
             Some(name) => name.clone(),
             None => "<anon>".to_string()
         };
-        Box::new(ast::Function::new(name, params, body))
+        Box::new(ast::Function::new(name, params, return_type, body))
     }
 
     fn array(&mut self) -> Box<dyn ast::Expression> {
@@ -512,15 +543,14 @@ impl Parser {
 
         if entries.is_empty() {
             self.consume(TokenType::Colon, "Empty arrays must be annoted with a type".to_string());
-            let typename = self.current_token().clone();
-            if typename.ttype != TokenType::Ident {
-                self.error(Some(
-                    format!("Expect a type name but found {} instead.", typename.text)
-                ));
-                return Box::new(ast::ErrorExpression{});
-            }
-            self.advance();
-            return match ast::Array::new_empty(typename.text) {
+            let typ = match self.type_annotation() {
+                Ok(type_annotation) => type_annotation,
+                Err(e) => {
+                    self.error(Some(e));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            };
+            return match ast::Array::new_empty(typ) {
                 Ok(array) => Box::new(array),
                 Err(e) => {
                     self.error(Some(e));
@@ -547,15 +577,14 @@ impl Parser {
             self.consume(TokenType::Colon, format!(
                 "Missing type annotation for field {}.", name
             ));
-            let typename = self.current_token().clone();
-            if typename.ttype != TokenType::Ident {
-                self.error(Some(
-                    format!("In type definition, expected field type but found {} instead.", typename.text)
-                ));
-                return Box::new(ast::ErrorExpression{});
-            }
-            self.advance();
-            fields.push(ast::NameAndType::new(name, typename.text));
+            let typ = match self.type_annotation() {
+                Ok(type_annotation) => type_annotation,
+                Err(e) => {
+                    self.error(Some(e));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            };
+            fields.push(ast::NameAndType::new(name, typ));
             if fields.len() > u8::MAX as usize {
                 self.error(Some(
                     format!("Too many fields in type definition.")
@@ -634,6 +663,7 @@ impl Parser {
         self.consume(TokenType::LBrace, "Expected '{' after 'if' condition.".to_string());
         let then_branch = self.block();
         let else_branch = if self.consume_if_match(TokenType::Else) {
+            self.consume(TokenType::LBrace, "Expected '{' after 'else'.".to_string());
             Some(self.block())
         }
         else {

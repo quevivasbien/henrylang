@@ -14,7 +14,7 @@ macro_rules! run_expect_value {
 
 #[test]
 fn test_fib() {
-    let source = "fib_helper := |n: Int, x: Int, y: Int| {
+    let source = "fib_helper := |n: Int, x: Int, y: Int|: Int {
         z := x + y
         if n = 1 {
             z
@@ -89,10 +89,10 @@ fn test_primes() {
 #[test]
 fn test_closure() {
     let source = "
-    f := |x| {
+    f := |x: Int| {
         a := x
         g := || {
-            add_a := |z| { a + z }
+            add_a := |z: Int| { a + z }
             add_a
         }
         add_a := g()

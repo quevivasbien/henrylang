@@ -7,7 +7,7 @@ use crate::ast;
 use crate::builtins;
 use crate::chunk::{Chunk, OpCode};
 use crate::compiler;
-use crate::values::{Closure, Function, HeapValue, NativeFunction, Object, TaggedValue, TypeDef, Value};
+use crate::values::{Closure, Function, HeapValue, NativeFunction, Object, ReturnValue, TaggedValue, TypeDef, Value};
 
 #[derive(Debug)]
 pub enum InterpreterError {
@@ -35,12 +35,6 @@ impl CallFrame {
     fn new(closure: Box<Closure>, stack_idx: usize, heap_stack_idx: usize) -> Self {
         Self { closure, ip: 0, stack_idx, heap_stack_idx }
     }
-}
-
-#[derive(Debug)]
-enum ReturnValue {
-    Value(Value),
-    HeapValue(HeapValue),
 }
 
 pub struct VM {
@@ -177,8 +171,12 @@ impl VM {
 
     pub fn call_native_function(&mut self, function: &'static NativeFunction) -> Result<(), InterpreterError> {
         let args = self.stack.split_off(self.stack.len() - function.arity as usize);
-        let result = (function.function)(self, &args)?;
-        self.stack.push(result);
+        let heap_args = self.heap_stack.split_off(self.heap_stack.len() - function.heap_arity as usize);
+        let result = (function.function)(self, &args, &heap_args)?;
+        match result {
+            ReturnValue::Value(v) => self.stack.push(v),
+            ReturnValue::HeapValue(v) => self.heap_stack.push(v),
+        };
         Ok(())
     }
 
@@ -311,6 +309,20 @@ impl VM {
                 OpCode::IntMultiply => self.binary_int_op(i64::mul),
                 OpCode::IntDivide => self.binary_int_op(i64::div),
                 OpCode::IntNegate => self.unary_int_op(i64::neg),
+                OpCode::To => {
+                    let r = self.stack.pop().expect("Expected int on stack");
+                    let l = self.stack.pop().expect("Expected int on stack");
+                    let (r, l) = unsafe {
+                        (r.i, l.i)
+                    };
+                    let arr: Vec<_> = if r >= l {
+                        (l..=r).map(|i| Value { i }).collect()
+                    }
+                    else {
+                        (r..=l).rev().map(|i| Value { i }).collect()
+                    };
+                    self.heap_stack.push(HeapValue::Array(Rc::from(arr)));
+                }
 
                 // Float ops
                 OpCode::FloatEqual => self.binary_float_comp(f64::eq),
@@ -388,7 +400,7 @@ impl VM {
                 OpCode::Call => {
                     match self.heap_stack.pop().expect("Attempted to call with empty stack") {
                         HeapValue::Closure(f) => self.call_function(f)?,
-                        // HeapValue::NativeFunction(f) => self.call_native_function(f)?,
+                        HeapValue::NativeFunction(f) => self.call_native_function(f)?,
                         // HeapValue::Array(arr) => self.array_index(arr.as_ref())?,
                         // HeapValue::TypeDef(td) => self.create_object(td)?,
                         // HeapValue::Object(obj) => self.get_field(obj)?,
@@ -511,11 +523,16 @@ impl VM {
                     }
                     self.heap_stack.push(HeapValue::Closure(closure));
                 },
-                // OpCode::GetUpvalue => {
-                //     let idx = self.read_u16();
-                //     let value = self.frame().closure.upvalues[idx as usize].clone();
-                //     self.stack.push(value);
-                // },
+                OpCode::GetUpvalue => {
+                    let idx = self.read_u16();
+                    let value = self.frame().closure.upvalues[idx as usize].clone();
+                    self.stack.push(value);
+                },
+                OpCode::GetHeapUpvalue => {
+                    let idx = self.read_u16();
+                    let value = self.frame().closure.heap_upvalues[idx as usize].clone();
+                    self.heap_stack.push(value);
+                }
                 OpCode::WrapSome => {
                     let value = self.stack.pop().expect("Attempted to wrap with empty stack");
                     self.heap_stack.push(HeapValue::Maybe(Some(value)));
@@ -567,8 +584,8 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
         (HeapValue::Maybe(x), ast::Type::Maybe(typ)) => {
             TaggedValue::from_maybe(x, typ.as_ref())
         },
-        (HeapValue::MaybeHeap(x), ast::Type::Maybe(typ)) => {
-            Err("Unimplemnted: unpack_heapvalue: MaybeHeap".to_string())
+        (HeapValue::MaybeHeap(_x), ast::Type::Maybe(_typ)) => {
+            Err("Unimplemented: unpack_heapvalue: MaybeHeap".to_string())
         },
         (HeapValue::ArrayHeap(arr), ast::Type::Array(typ)) => {
             match typ.as_ref() {

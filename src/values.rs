@@ -65,7 +65,8 @@ impl Closure {
 pub struct NativeFunction {
     pub name: &'static str,
     pub arity: u8,
-    pub function: fn(&mut VM, &[Value]) -> Result<Value, InterpreterError>,
+    pub heap_arity: u8,
+    pub function: fn(&mut VM, &[Value], &[HeapValue]) -> Result<ReturnValue, InterpreterError>,
 }
 
 impl Debug for NativeFunction {
@@ -195,6 +196,13 @@ pub enum HeapValue {
     Maybe(Option<Value>),
     MaybeHeap(Option<Box<HeapValue>>),
     Closure(Box<Closure>),
+    NativeFunction(&'static NativeFunction),
+}
+
+#[derive(Debug)]
+pub enum ReturnValue {
+    Value(Value),
+    HeapValue(HeapValue),
 }
 
 #[derive(Debug)]
@@ -212,7 +220,7 @@ impl Display for TaggedValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TaggedValue::Int(i) => write!(f, "{}", i),
-            TaggedValue::Float(fl) => write!(f, "{:.}", fl),
+            TaggedValue::Float(fl) => write!(f, "{:.?}", fl),
             TaggedValue::Bool(b) => write!(f, "{}", b),
             TaggedValue::String(s) => write!(f, "{}", s),
             TaggedValue::Array(arr) => {

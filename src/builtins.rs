@@ -1,101 +1,34 @@
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::mpsc;
 
 use lazy_static::lazy_static;
 
 use crate::ast::Type;
-use crate::values::{NativeFunction, HeapValue, Value};
+use crate::values::{HeapValue, NativeFunction, ReturnValue, Value};
 
 lazy_static! {
-    // static ref PRINT: NativeFunction = NativeFunction {
-    //     name: "print",
-    //     arity: 1,
-    //     function: |_vm, args| {
-    //         Ok(match &args[0] {
-    //             Value::String(x) => {
-    //                 println!("{}", x);
-    //                 Value::String(x.clone())
-    //             },
-    //             x => {
-    //                 println!("{}", x);
-    //                 Value::String(Rc::new(format!("{}", x)))
-    //             }
-    //         })
-    //     }
-    // };
+    static ref PRINT: NativeFunction = NativeFunction {
+        name: "print",
+        arity: 0,
+        heap_arity: 1,
+        function: |_vm, _args, heap_args| {
+            Ok(match &heap_args[0] {
+                HeapValue::String(x) => {
+                    println!("{}", x);
+                    ReturnValue::HeapValue(HeapValue::String(x.clone()))
+                },
+                _ => unreachable!()
+            })
+        }
+    };
 
-    // static ref TYPEOF: NativeFunction = NativeFunction {
-    //     name: "typeof",
-    //     arity: 1,
-    //     function: |_vm, args| {
-    //         fn recurse_type(x: &Value) -> String {
-    //             match x {
-    //                 Value::Int(_) => "Int".to_string(),
-    //                 Value::Float(_) => "Float".to_string(),
-    //                 Value::String(_) => "String".to_string(),
-    //                 Value::Bool(_) => "Bool".to_string(),
-    //                 Value::Array(_) => "Array".to_string(),
-    //                 Value::Object(x) => {
-    //                     format!("Object({})", x.typedef.name)
-    //                 },
-    //                 Value::Closure(_) => "Function".to_string(),
-    //                 Value::NativeFunction(_) => "Function".to_string(),
-    //                 Value::TypeDef(_) => "TypeDef".to_string(),
-    //                 Value::Maybe(x) => {
-    //                     match x.as_ref() {
-    //                         Some(x) => format!("Some({})", recurse_type(x)),
-    //                         None => "Null".to_string(),
-    //                     }
-    //                 },
-    //             }
-    //         }
-    //         Ok(Value::String(Rc::new(recurse_type(&args[0]))))
-    //     }
-    // };
-
-    // static ref INT: NativeFunction = NativeFunction {
-    //     name: "int",
-    //     arity: 1,
-    //     function: |vm, args| {
-    //         let i = match &args[0] {
-    //             Value::String(x) => match x.parse::<i64>() {
-    //                 Ok(x) => x,
-    //                 Err(_) => return Err(vm.runtime_err(
-    //                     format!("Unable to parse int from string \"{}\"", x)
-    //                 )),
-    //             },
-    //             Value::Int(x) => *x,
-    //             Value::Float(x) => *x as i64,
-    //             Value::Bool(x) => *x as i64,
-    //             x => return Err(vm.runtime_err(
-    //                 format!("Cannot call int on non-numeric or string type, got {:?}", x)
-    //             )),
-    //         };
-    //         Ok(Value::Int(i))
-    //     }
-    // };
-
-    // static ref FLOAT: NativeFunction = NativeFunction {
-    //     name: "float",
-    //     arity: 1,
-    //     function: |vm, args| {
-    //         let f = match &args[0] {
-    //             Value::String(x) => match x.parse::<f64>() {
-    //                 Ok(x) => x,
-    //                 Err(_) => return Err(vm.runtime_err(
-    //                     format!("Unable to parse float from string \"{}\"", x)
-    //                 )),
-    //             }
-    //             Value::Int(x) => *x as f64,
-    //             Value::Float(x) => *x,
-    //             x => return Err(vm.runtime_err(
-    //                 format!("Cannot call float on non-numeric type, got {:?}", x)
-    //             )),
-    //         };
-    //         Ok(Value::Float(f))
-    //     }
-    // };
+    static ref ITOF: NativeFunction = NativeFunction {
+        name: "itof",
+        arity: 1,
+        heap_arity: 0,
+        function: |_vm, args, _heap_args| {
+            Ok(ReturnValue::Value(unsafe { Value { f: (args[0].i as f64) } }))
+        }
+    };
 
     // static ref STRING: NativeFunction = NativeFunction {
     //     name: "string",
@@ -864,58 +797,25 @@ lazy_static! {
 
 pub fn builtin_types() -> HashMap<String, Type> {
     let mut map = HashMap::new();
-    // map.insert("print".to_string(), Type::Function(vec![Type::String], Box::new(Type::String)));
-    // todo: add other types
+    map.insert("print".to_string(), Type::Function(vec![Type::String], Box::new(Type::String)));
+    map.insert("itof".to_string(), Type::Function(vec![Type::Int], Box::new(Type::Float)));
+    
+    map.insert("E".to_string(), Type::Float);
 
     map
 }
 
 pub fn builtins() -> HashMap<String, Value> {
     let mut map = HashMap::new();
-    // map.insert("print".to_string(), Value::NativeFunction(&PRINT));
-
-    // map.insert("typeof".to_string(), Value::NativeFunction(&TYPEOF));
-    // map.insert("int".to_string(), Value::NativeFunction(&INT));
-    // map.insert("float".to_string(), Value::NativeFunction(&FLOAT));
-    // map.insert("string".to_string(), Value::NativeFunction(&STRING));
-    // map.insert("array".to_string(), Value::NativeFunction(&ARRAY));
-
-    // map.insert("is_null".to_string(), Value::NativeFunction(&IS_NULL));
-    // map.insert("is_some".to_string(), Value::NativeFunction(&IS_SOME));
-    // map.insert("unwrap".to_string(), Value::NativeFunction(&UNWRAP));
-
-    // map.insert("abs".to_string(), Value::NativeFunction(&ABS));
-    // map.insert("mod".to_string(), Value::NativeFunction(&MOD));
-    // map.insert("pow".to_string(), Value::NativeFunction(&POW));
-    // map.insert("sqrt".to_string(), Value::NativeFunction(&SQRT));
-    // map.insert("exp".to_string(), Value::NativeFunction(&EXP));
-    // map.insert("log".to_string(), Value::NativeFunction(&LOG));
-    // map.insert("sin".to_string(), Value::NativeFunction(&SIN));
-    // map.insert("cos".to_string(), Value::NativeFunction(&COS));
-    // map.insert("tan".to_string(), Value::NativeFunction(&TAN));
-    // map.insert("asin".to_string(), Value::NativeFunction(&ASIN));
-    // map.insert("acos".to_string(), Value::NativeFunction(&ACOS));
-    // map.insert("atan".to_string(), Value::NativeFunction(&ATAN));
-
-    // map.insert("len".to_string(), Value::NativeFunction(&LEN));
-    // map.insert("max".to_string(), Value::NativeFunction(&MAX));
-    // map.insert("min".to_string(), Value::NativeFunction(&MIN));
-    // map.insert("sum".to_string(), Value::NativeFunction(&SUM));
-    // map.insert("prod".to_string(), Value::NativeFunction(&PROD));
-    // map.insert("zip".to_string(), Value::NativeFunction(&ZIP));
-    // map.insert("filter".to_string(), Value::NativeFunction(&FILTER));
-    // map.insert("take_while".to_string(), Value::NativeFunction(&TAKE_WHILE));
-    // map.insert("map".to_string(), Value::NativeFunction(&MAP));
-    // map.insert("reduce".to_string(), Value::NativeFunction(&REDUCE));
-    // map.insert("all".to_string(), Value::NativeFunction(&ALL));
-    // map.insert("any".to_string(), Value::NativeFunction(&ANY));
-    // map.insert("take".to_string(), Value::NativeFunction(&TAKE));
-    // map.insert("skip".to_string(), Value::NativeFunction(&SKIP));
+    map.insert("E".to_string(), Value { f: std::f64::consts::E });
 
     map
 }
 
 pub fn heap_builtins() -> HashMap<String, HeapValue> {
     let mut map = HashMap::new();
+    map.insert("print".to_string(), HeapValue::NativeFunction(&PRINT));
+    map.insert("itof".to_string(), HeapValue::NativeFunction(&ITOF));
+
     map
 }
