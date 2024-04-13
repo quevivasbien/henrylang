@@ -1,3 +1,5 @@
+use std::any::Any;
+
 use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
 use crate::values::{HeapValue, Value};
@@ -73,8 +75,8 @@ pub trait Expression: std::fmt::Debug {
     fn get_parent(&self) -> Option<*const dyn Expression>;
     // get a list of variables and their types that are defined in this expression
     // will stop looking if the given expression if reached
-    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
-        vec![]
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
@@ -125,9 +127,13 @@ impl Expression for ASTTopLevel {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         None
     }
-    fn vartypes(&self, _upto: *const dyn Expression) -> Vec<VarType> {
-        println!("self len: {}", self.types.len());
-        self.types.clone()
+    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Option<Type> {
+        for t in self.types.iter() {
+            if &t.name == name {
+                return Some(t.typ.clone());
+            }
+        }
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -173,15 +179,16 @@ impl Expression for Block {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
-        let mut out = Vec::new();
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
         for e in self.expressions.iter() {
             if e.as_ref() as *const _ as *const () == upto as *const () {
                 break;
             }
-            out.extend(e.vartypes(upto));
+            if let Some(t) = e.find_vartype(name, upto) {
+                return Some(t);
+            };
         }
-        out
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -241,15 +248,33 @@ impl Expression for Function {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
         // vartypes in block should have been already processed, since block is a child of function
-        self.param_vartypes(upto)
+        for p in self.params.iter() {
+            if &p.name == name {
+                return Some(p.get_type().unwrap());
+            }
+        }
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let mut inner_compiler = Compiler::new_from(compiler);
+        let (ptypes, rtype) = match self.get_type()? {
+            Type::Function(ptypes, rtype) => (ptypes, *rtype),
+            _ => unreachable!(),
+        };
+        
         inner_compiler.function.name = self.name.clone();
-        inner_compiler.function.arity = self.params.len() as u8;
+        let mut heap_arity = 0;
+        for t in ptypes.iter() {
+            if t.is_heap() {
+                heap_arity += 1; 
+            }
+        }
+        inner_compiler.function.arity = self.params.len() as u8 - heap_arity;
+        inner_compiler.function.heap_arity = heap_arity;
+        
         for param in self.params.iter() {
             if inner_compiler.create_variable(param.name.clone(), &param.get_type()?)?.is_some() {
                 return Err(format!(
@@ -257,15 +282,17 @@ impl Expression for Function {
                 ));
             }
         }
+
         self.block.compile(&mut inner_compiler)?;
         inner_compiler.write_opcode(
-            if self.get_type()?.is_heap() {
+            if rtype.is_heap() {
                 OpCode::ReturnHeap
             }
             else {
                 OpCode::Return
             }
         );
+
         compiler.write_function(inner_compiler)
     }
 }
@@ -583,11 +610,9 @@ impl Expression for Variable {
                     "Could not find definition for variable {}", self.name
                 ));
             }
-            let vartypes = unsafe { (*e).vartypes(last_e) };
-            for vartype in vartypes.into_iter() {
-                if vartype.name == self.name {
-                    return Ok(vartype.typ);
-                }
+            let typ = unsafe { (*e).find_vartype(&self.name, last_e) };
+            if let Some(typ) = typ {
+                return Ok(typ);
             }
         }
     }
@@ -629,11 +654,14 @@ impl Expression for Assignment {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
+    fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Option<Type> {
         if self.value.as_ref() as *const _ as *const () == upto as *const () {
-            return vec![];
+            return None;
         }
-        vec![VarType::new(self.name.clone(), self.value.get_type().unwrap())]
+        if &self.name == name {
+            return Some(self.value.get_type().unwrap());
+        }
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
@@ -844,8 +872,13 @@ impl Expression for TypeDef {
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
     }
-    fn vartypes(&self, upto: *const dyn Expression) -> Vec<VarType> {
-        self.field_vartypes(upto)
+    fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Option<Type> {
+        for f in self.fields.iter() {
+            if &f.name == name {
+                return Some(f.get_type().unwrap());
+            }
+        }
+        None
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {

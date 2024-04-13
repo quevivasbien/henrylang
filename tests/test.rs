@@ -5,9 +5,8 @@ macro_rules! run_expect_value {
     ($source:expr, $variant:ident) => {
         match VM::new().interpret($source.to_string())
             .unwrap()
-            .expect("Should be a value")
         {
-            Value::$variant(x) => x,
+            values::TaggedValue::$variant(x) => x,
             _ => panic!("Should be a {}", stringify!($variant)),
         }
     }
@@ -15,7 +14,7 @@ macro_rules! run_expect_value {
 
 #[test]
 fn test_fib() {
-    let source = "fib_helper := |n, x, y| {
+    let source = "fib_helper := |n: Int, x: Int, y: Int| {
         z := x + y
         if n = 1 {
             z
@@ -25,7 +24,7 @@ fn test_fib() {
         }
     }
     
-    fib := |n| {
+    fib := |n: Int| {
         if n < 3 {
             1
         }
@@ -43,7 +42,7 @@ fn test_fib() {
 
 #[test]
 fn test_euler() {
-    let source = "factorial := |x| {
+    let source = "factorial := |x: Int| {
         if x <= 1 {
             1
         }
@@ -52,7 +51,7 @@ fn test_euler() {
         }
     }
     
-    approx_e := |n| {
+    approx_e := |n: Int| {
         if n = 0 {
             1.0
         }
@@ -155,7 +154,7 @@ fn test_builtins() {
     assert_eq!(result, 24);
 
     let result = run_expect_value!("sum(string -> (0 to 4))", String);
-    assert_eq!(result.as_ref(), "01234");
+    assert_eq!(result, "01234");
 
     let result = run_expect_value!("max(|x| { -2 * x*x + x + 4 } -> (-4 to 4))", Int);
     assert_eq!(result, 4);

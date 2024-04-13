@@ -60,6 +60,7 @@ pub struct Compiler {
     pub typecontext: TypeContext,
     locals: LocalData,
     upvalues: Vec<Upvalue>,
+    heap_upvalues: Vec<Upvalue>,
     // I'm aware that storing pointers rather than references is not ideal, but this drastically simplifies the code, making it so there aren't lifetimes attached to everything
     // In practice, this should be fine: Compilers are only ever created and used by their parents.
     parent: *mut Compiler,
@@ -72,6 +73,7 @@ impl Compiler {
             typecontext,
             locals: LocalData::default(),
             upvalues: Vec::new(),
+            heap_upvalues: Vec::new(),
             parent: std::ptr::null_mut(),
         }
     }
@@ -111,11 +113,8 @@ impl Compiler {
         self.chunk().patch_jump(offset).map_err(|e| e.to_string())
     }
     pub fn write_function(&mut self, inner_compiler: Compiler) -> Result<(), String> {
-        unimplemented!("write_function")
-        // let closure = Value::Closure(Box::new(
-        //     Closure::new(Rc::new(inner_compiler.function))
-        // ));
-        // self.chunk().write_closure(closure, inner_compiler.upvalues, 0).map_err(|e| e.to_string())
+        let closure = Closure::new(Rc::new(inner_compiler.function));
+        self.chunk().write_closure(closure, inner_compiler.upvalues, inner_compiler.heap_upvalues, 0).map_err(|e| e.to_string())
     }
 
     pub fn begin_scope(&mut self) {
@@ -176,7 +175,24 @@ impl Compiler {
         }
     }
 
-    fn add_upvalue(&mut self, index: u16, is_local: bool) -> Result<u16, String> {
+    fn add_heap_upvalue(&mut self, index: u16, is_local: bool) -> Result<u16, String> {
+        let uv = Upvalue { index, is_local };
+        for (i, upvalue) in self.heap_upvalues.iter().enumerate() {
+            if *upvalue == uv {
+                return Ok(i as u16);
+            }
+        }
+        if self.heap_upvalues.len() == u16::MAX as usize {
+            return Err("Too many heap upvalues in current function".to_string());
+        }
+        self.heap_upvalues.push(uv);
+        self.function.num_heap_upvalues += 1;
+        Ok((self.heap_upvalues.len() - 1) as u16)
+    }
+    fn add_upvalue(&mut self, index: u16, is_local: bool, is_heap: bool) -> Result<u16, String> {
+        if is_heap {
+            return self.add_heap_upvalue(index, is_local);
+        }
         let uv = Upvalue { index, is_local };
         // check if this upvalue already exists
         for (i, upvalue) in self.upvalues.iter().enumerate() {
@@ -191,7 +207,7 @@ impl Compiler {
         self.function.num_upvalues += 1;
         Ok((self.upvalues.len() - 1) as u16)
     }
-    fn resolve_upvalue(&mut self, name: &String) -> Result<Option<u16>, String> {
+    fn resolve_upvalue(&mut self, name: &String, is_heap: bool) -> Result<Option<u16>, String> {
         if self.parent.is_null() {
             return Ok(None);
         }
@@ -199,14 +215,15 @@ impl Compiler {
         
         // look for upvalue as local in parent scope
         if let Some(idx) = parent.locals.get_idx(name) {
-            return Ok(Some(self.add_upvalue(idx, true)?));
+            return Ok(Some(self.add_upvalue(idx, true, is_heap)?));
         }
 
         // look for upvalue recursively going upward in scope
-        if let Some(idx) = parent.resolve_upvalue(name)? {
-            return Ok(Some(self.add_upvalue(idx, false)?));
+        if let Some(idx) = parent.resolve_upvalue(name, is_heap)? {
+            return Ok(Some(self.add_upvalue(idx, false, is_heap)?));
         }
 
+        // not found, presumed to be global variable
         Ok(None)
     }
 
@@ -215,8 +232,8 @@ impl Compiler {
         let res = if let Some(idx) = local_idx {
             self.chunk().write_get_local(idx, is_heap, 0)
         }
-        else if let Some(idx) = self.resolve_upvalue(&name)? {
-            self.chunk().write_get_upvalue(idx, 0)
+        else if let Some(idx) = self.resolve_upvalue(&name, is_heap)? {
+            self.chunk().write_get_upvalue(idx, is_heap, 0)
         }
         else {
             self.chunk().write_get_global(name, is_heap, 0)

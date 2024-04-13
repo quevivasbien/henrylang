@@ -160,18 +160,19 @@ impl VM {
     }
 
     pub fn call_function(&mut self, closure: Box<Closure>) -> Result<(), InterpreterError> {
-        todo!()
-        // let n_args = closure.function.arity as usize;
-        // let new_frame = CallFrame::new(closure, self.stack.len() - n_args);
-        // self.frames.push(new_frame);
-        // let result = match self.call()? {
-        //     Some(x) => x,
-        //     None => Value::from_none(),
-        // };
-        // // clear stack used by function and function args
-        // self.stack.truncate(self.stack.len() - n_args);
-        // self.stack.push(result);
-        // Ok(())
+        let n_args = closure.function.arity as usize;
+        let n_heap_args = closure.function.heap_arity as usize;
+        let new_frame = CallFrame::new(closure, self.stack.len() - n_args, self.heap_stack.len() - n_heap_args);
+        self.frames.push(new_frame);
+        let result = self.call()?;
+        // clear stack used by function and function args
+        self.stack.truncate(self.stack.len() - n_args);
+        self.heap_stack.truncate(self.heap_stack.len() - n_heap_args);
+        match result {
+            ReturnValue::Value(v) => self.stack.push(v),
+            ReturnValue::HeapValue(v) => self.heap_stack.push(v),
+        };
+        Ok(())
     }
 
     pub fn call_native_function(&mut self, function: &'static NativeFunction) -> Result<(), InterpreterError> {
@@ -262,7 +263,7 @@ impl VM {
             #[cfg(feature = "debug")]
             {
                 print!("stack: {:?}, ", &self.stack[self.frame().stack_idx..]);
-                print!("heap_stack: {:?}, ", &self.heap_stack[self.frame().stack_idx..]);
+                print!("heap_stack: {:?}, ", &self.heap_stack[self.frame().heap_stack_idx..]);
                 print!("globals: {:?}, ", self.globals);
                 print!("heap globals: {:?}, ", self.heap_globals);
                 let mut ip_copy = self.frame().ip;
@@ -384,16 +385,17 @@ impl VM {
                         *ip += offset as usize;
                     }
                 },
-                // OpCode::Call => {
-                //     match self.stack.pop().expect("Attempted to call with empty stack") {
-                //         Value::Closure(f) => self.call_function(f)?,
-                //         Value::NativeFunction(f) => self.call_native_function(f)?,
-                //         Value::Array(arr) => self.array_index(arr.as_ref())?,
-                //         Value::TypeDef(td) => self.create_object(td)?,
-                //         Value::Object(obj) => self.get_field(obj)?,
-                //         _ => unreachable!()
-                //     };
-                // },
+                OpCode::Call => {
+                    match self.heap_stack.pop().expect("Attempted to call with empty stack") {
+                        HeapValue::Closure(f) => self.call_function(f)?,
+                        // HeapValue::NativeFunction(f) => self.call_native_function(f)?,
+                        // HeapValue::Array(arr) => self.array_index(arr.as_ref())?,
+                        // HeapValue::TypeDef(td) => self.create_object(td)?,
+                        // HeapValue::Object(obj) => self.get_field(obj)?,
+                        _ => unreachable!()
+                    };
+                },
+
                 OpCode::Array => {
                     let n_elems = self.read_u16();
                     let arr = Rc::from(self.stack.split_off(self.stack.len() - n_elems as usize));
@@ -478,23 +480,37 @@ impl VM {
                     let value = self.heap_stack[self.frame().heap_stack_idx + idx as usize].clone();
                     self.heap_stack.push(value);
                 },
-                // OpCode::Closure => {
-                //     let mut closure = match self.read_constant() {
-                //         Value::Closure(c) => c.clone(),
-                //         _ => unreachable!("Closure was not a function"),
-                //     };
-                //     for _ in 0..closure.function.num_upvalues {
-                //         let is_local = self.read_u8() == 1;
-                //         let index = self.read_u16();
-                //         closure.upvalues.push(if is_local {
-                //             self.stack[self.frame().stack_idx + index as usize].clone()
-                //         }
-                //         else {
-                //             self.frame().closure.upvalues[index as usize].clone()
-                //         });
-                //     }
-                //     self.stack.push(Value::Closure(closure));
-                // },
+                OpCode::Closure => {
+                    let mut closure = match self.read_heap_constant() {
+                        HeapValue::Closure(c) => c.clone(),
+                        _ => unreachable!("Closure was not a function"),
+                    };
+                    for _ in 0..closure.function.num_upvalues {
+                        let is_local = self.read_u8() == 1;
+                        let index = self.read_u16();
+                        closure.upvalues.push(
+                            if is_local {
+                                self.stack[self.frame().stack_idx + index as usize].clone()
+                            }
+                            else {
+                                self.frame().closure.upvalues[index as usize].clone()
+                            }
+                        )
+                    }
+                    for _ in 0..closure.function.num_heap_upvalues {
+                        let is_local = self.read_u8() == 1;
+                        let index = self.read_u16();
+                        closure.heap_upvalues.push(
+                            if is_local {
+                                self.heap_stack[self.frame().heap_stack_idx + index as usize].clone()
+                            }
+                            else {
+                                self.frame().closure.heap_upvalues[index as usize].clone()
+                            }
+                        )
+                    }
+                    self.heap_stack.push(HeapValue::Closure(closure));
+                },
                 // OpCode::GetUpvalue => {
                 //     let idx = self.read_u16();
                 //     let value = self.frame().closure.upvalues[idx as usize].clone();
@@ -552,7 +568,7 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
             TaggedValue::from_maybe(x, typ.as_ref())
         },
         (HeapValue::MaybeHeap(x), ast::Type::Maybe(typ)) => {
-            unimplemented!("unpack_heapvalue: MaybeHeap")
+            Err("Unimplemnted: unpack_heapvalue: MaybeHeap".to_string())
         },
         (HeapValue::ArrayHeap(arr), ast::Type::Array(typ)) => {
             match typ.as_ref() {
@@ -591,7 +607,10 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
                 // },
                 // _ => unreachable!("Expected an array of arrays but got something else"),
             }
-        }
+        },
+        (HeapValue::Closure(f), ast::Type::Function(..)) => {
+            Ok(TaggedValue::Closure(f))
+        },
         (x, rt) => return Err(
             format!(
                 "Got unexpected return value: {:?}; expected {:?}",

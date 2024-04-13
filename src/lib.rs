@@ -5,7 +5,7 @@ mod compiler;
 mod parser;
 mod scanner;
 mod token;
-mod values;
+pub mod values;
 mod vm;
 
 pub use vm::VM;

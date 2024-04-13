@@ -9,40 +9,43 @@ use crate::chunk::Chunk;
 pub struct Function {
     pub name: String,
     pub num_upvalues: u16,
+    pub num_heap_upvalues: u16,
     pub arity: u8,
+    pub heap_arity: u8,
     pub chunk: Chunk,
 }
 
 impl Default for Function {
     fn default() -> Self {
-        Self { name: String::new(), num_upvalues: 0, arity: 0, chunk: Chunk::new() }
+        Self { name: String::new(), num_upvalues: 0, num_heap_upvalues: 0, arity: 0, heap_arity: 0, chunk: Chunk::new() }
     }
 }
 
 impl Debug for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}[{}](<{}>){{{}}}", self.name, self.num_upvalues, self.arity, self.chunk.len())
+        write!(f, "{}[{}](<{}+{}>){{{}}}", self.name, self.num_upvalues, self.arity, self.heap_arity, self.chunk.len())
     }
 }
 
 impl Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = if self.name.is_empty() { &"<anon>" } else { self.name.as_str() };
-        write!(f, "{}(<{}>)", name, self.arity)
+        write!(f, "{}(<{}+{}>)", name, self.arity, self.heap_arity)
     }
 }
 
-// #[derive(Clone)]
+#[derive(Clone)]
 pub struct Closure {
     pub function: Rc<Function>,
     pub upvalues: Vec<Value>,
+    pub heap_upvalues: Vec<HeapValue>,
 }
 
-// impl Debug for Closure {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{:?}{:?}", self.upvalues, self.function)
-//     }
-// }
+impl Debug for Closure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}{:?}", self.upvalues, self.function)
+    }
+}
 
 impl Display for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -53,7 +56,8 @@ impl Display for Closure {
 impl Closure {
     pub fn new(function: Rc<Function>) -> Self {
         let upvalues = Vec::with_capacity(function.num_upvalues as usize);
-        Self { function, upvalues }
+        let heap_upvalues = Vec::with_capacity(function.num_heap_upvalues as usize);
+        Self { function, upvalues, heap_upvalues }
     }
 }
 
@@ -183,28 +187,6 @@ impl std::fmt::Debug for Value {
     }
 }
 
-pub fn arr_to_bytes(arr: &[Value]) -> &[u8] {
-    let ptr = arr.as_ptr();
-    let byte_arr = unsafe {
-        std::slice::from_raw_parts(
-            ptr as *const u8,
-            arr.len() * std::mem::size_of::<Value>() / std::mem::size_of::<u8>()
-        )
-    };
-    byte_arr
-}
-
-pub fn bytes_to_arr(bytes: &[u8]) -> Vec<Value> {
-    let ptr = bytes.as_ptr();
-    let arr = unsafe {
-        std::slice::from_raw_parts(
-            ptr as *const Value,
-            bytes.len() * std::mem::size_of::<u8>() / std::mem::size_of::<Value>()
-        )
-    };
-    arr.to_vec()
-}
-
 #[derive(Debug, Clone)]
 pub enum HeapValue {
     String(Rc<String>),
@@ -212,6 +194,7 @@ pub enum HeapValue {
     ArrayHeap(Rc<[HeapValue]>),
     Maybe(Option<Value>),
     MaybeHeap(Option<Box<HeapValue>>),
+    Closure(Box<Closure>),
 }
 
 #[derive(Debug)]
@@ -222,6 +205,7 @@ pub enum TaggedValue {
     String(String),
     Array(Vec<TaggedValue>),
     Maybe(Option<Box<TaggedValue>>),
+    Closure(Box<Closure>),
 }
 
 impl Display for TaggedValue {
@@ -246,7 +230,8 @@ impl Display for TaggedValue {
                     Some(v) => write!(f, "Some({})", v),
                     None => write!(f, "Null"),
                 }
-            }
+            },
+            TaggedValue::Closure(closure) => write!(f, "{}", closure),
         }
     }
 }

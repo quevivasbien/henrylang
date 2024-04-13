@@ -3,7 +3,7 @@ use std::rc::Rc;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use crate::compiler;
-use crate::values::{HeapValue, Value};
+use crate::values::{Closure, HeapValue, Value};
 
 #[derive(Debug, PartialEq)]
 #[repr(u8)]
@@ -80,8 +80,10 @@ pub enum OpCode {
     SetHeapLocal,
     GetLocal,
     GetHeapLocal,
+    
     Closure,
     GetUpvalue,
+    GetHeapUpvalue,
 
     WrapSome,
     WrapHeapSome,
@@ -159,22 +161,28 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of constant to bytes")
     }
 
-    pub fn write_closure(&mut self, value: Value, upvalues: Vec<compiler::Upvalue>, line: usize) -> Result<(), &'static str> {
-        unimplemented!("write_closure")
-        // match &value {
-        //     Value::Closure(func) => func.clone(),
-        //     _ => return Err("Value is not a closure"),
-        // };
-        // let idx = self.create_constant(value)?;
-        // self.write_opcode(OpCode::Closure, line);
-        // self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
-        // for upvalue in upvalues.iter() {
-        //     self.bytes.write_u8(
-        //         if upvalue.is_local { 1 } else { 0 }
-        //     ).map_err(|_| "Failed to write upvalue locality to bytes")?;
-        //     self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
-        // }
-        // Ok(())
+    pub fn write_closure(
+        &mut self,
+        closure: Closure,
+        upvalues: Vec<compiler::Upvalue>,
+        heap_upvalues: Vec<compiler::Upvalue>,
+        line: usize
+    ) -> Result<(), &'static str> {
+        let closure = HeapValue::Closure(Box::new(closure));
+        let idx = self.create_heap_constant(closure)?;
+        self.write_opcode(OpCode::Closure, line);
+        self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of closure to bytes")?;
+        for upvalue in upvalues.iter() {
+            let locality = if upvalue.is_local { 1 } else { 0 };
+            self.bytes.write_u8(locality ).map_err(|_| "Failed to write locality and heapness of upvalue to bytes")?;
+            self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
+        }
+        for upvalue in heap_upvalues.iter() {
+            let locality = if upvalue.is_local { 1 } else { 0 };
+            self.bytes.write_u8(locality ).map_err(|_| "Failed to write locality and heapness of upvalue to bytes")?;
+            self.bytes.write_u16::<BigEndian>(upvalue.index).map_err(|_| "Failed to write index of upvalue to bytes")?;
+        }
+        Ok(())
     }
 
     pub fn write_set_global(&mut self, idx: u16, is_heap: bool, line: usize) -> Result<(), &'static str> {
@@ -202,8 +210,11 @@ impl Chunk {
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of local variable to bytes")
     }
 
-    pub fn write_get_upvalue(&mut self, idx: u16, line: usize) -> Result<(), &'static str> {
-        self.write_opcode(OpCode::GetUpvalue, line);
+    pub fn write_get_upvalue(&mut self, idx: u16, is_heap: bool, line: usize) -> Result<(), &'static str> {
+        self.write_opcode(
+            if is_heap { OpCode::GetHeapUpvalue } else { OpCode::GetUpvalue },
+            line
+        );
         self.bytes.write_u16::<BigEndian>(idx).map_err(|_| "Failed to write index of upvalue to bytes")
     }
 
@@ -290,6 +301,7 @@ impl Chunk {
                 let constant = self.read_heap_constant(ip);
                 println!("{:04} HeapConstant {:?}", ip0, constant);
             },
+
             OpCode::EndBlock => {
                 let n_pops = self.read_u16(ip);
                 let n_heap_pops = self.read_u16(ip);
@@ -308,6 +320,7 @@ impl Chunk {
                 let offset = self.read_u16(ip);
                 println!("{:04} JumpIfFalse {:?}", ip0, offset);
             },
+
             OpCode::Array => {
                 let num_elems = self.read_u16(ip);
                 println!("{:04} Array {}", ip0, num_elems);
@@ -316,6 +329,7 @@ impl Chunk {
                 let num_elems = self.read_u16(ip);
                 println!("{:04} ArrayArray {}", ip0, num_elems);
             },
+
             OpCode::SetGlobal => {
                 let name = match self.read_heap_constant(ip) {
                     HeapValue::String(s) => s.clone(),
@@ -360,6 +374,22 @@ impl Chunk {
                 let idx = self.read_u16(ip);
                 println!("{:04} GetHeapLocal {}", ip0, idx);
             },
+            
+            OpCode::Closure => {
+                let closure = match self.read_heap_constant(ip) {
+                    HeapValue::Closure(c) => c,
+                    _ => unreachable!(),
+                };
+                let n_upvalues = closure.function.num_upvalues;
+                let n_heap_upvalues = closure.function.num_heap_upvalues;
+                println!("{:04} Closure {} {}", ip0, n_upvalues, n_heap_upvalues);
+                for _ in 0..(n_upvalues+n_heap_upvalues) {
+                    let is_local = self.read_u8(ip) == 1;
+                    let index = self.read_u16(ip);
+                    println!(" | local: {}, idx: {}", is_local, index);
+                }
+            },
+
             x => println!("{:04} {:?}", ip0, x),
         }
     }
