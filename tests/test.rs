@@ -47,16 +47,16 @@ fn test_euler() {
             1
         }
         else {
-            prod(1 to x)
+            prodi(1 to x)
         }
     }
     
-    approx_e := |n: Int| {
+    approx_e := |n: Int|: Float {
         if n = 0 {
             1.0
         }
         else {
-            1.0 / float(factorial(n)) + approx_e(n-1)
+            1.0 / itof(factorial(n)) + approx_e(n-1)
         }
     }
     
@@ -100,7 +100,7 @@ fn test_closure() {
         add_a(2)
     }
     
-    sum(f -> 0 to 3)
+    sumi(f -> 0 to 3)
     ";
 
     let result = run_expect_value!(source, Int);

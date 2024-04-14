@@ -327,7 +327,7 @@ impl Chunk {
             },
             OpCode::ArrayHeap => {
                 let num_elems = self.read_u16(ip);
-                println!("{:04} ArrayArray {}", ip0, num_elems);
+                println!("{:04} ArrayHeap {}", ip0, num_elems);
             },
 
             OpCode::SetGlobal => {

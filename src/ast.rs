@@ -488,6 +488,15 @@ impl Expression for Binary {
             | TokenType::GT
             | TokenType::LT => Ok(Type::Bool),
             TokenType::To => Ok(Type::Array(Box::new(Type::Int))),
+            TokenType::RightArrow => {
+                let left_type = self.left.get_type()?;
+                match left_type {
+                    Type::Function(_, typ) => Ok(Type::Array(Box::new(*typ))),
+                    Type::Array(typ) => Ok(Type::Array(Box::new(*typ))),
+                    Type::String => Ok(Type::Array(Box::new(Type::String))),
+                    typ => Err(format!("Cannot use '->' on type {:?}", typ))
+                }
+            }
             _ => self.left.get_type(),
         }
     }
@@ -504,15 +513,43 @@ impl Expression for Binary {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let left_type = self.left.get_type()?;
         let right_type = self.right.get_type()?;
-        if left_type != right_type {
-            // todo! this isn't quite the right type checking for all operators
-            return Err(format!(
-                "Operands must be of the same type; got {:?} and {:?}",
-                left_type, right_type
-            ));
-        }
+
         self.left.compile(compiler)?;
         self.right.compile(compiler)?;
+
+        if self.op == TokenType::RightArrow {
+            if let Type::Array(arr_type) = &right_type {
+                match &left_type {
+                    Type::Array(_) | Type::String => {
+                        if arr_type.as_ref() != &Type::Int {
+                            return Err(format!(
+                                "Cannot map from type {:?} using non-integer type {:?}",
+                                left_type, arr_type
+                            ));
+                        }
+                    },
+                    Type::Function(arg_type, _) => {
+                        if arg_type.len() != 1 {
+                            return Err(format!("Cannot map with a function does not have a single argument; got a function with {} arguments", arg_type.len()));
+                        }
+                        if &arg_type[0] != arr_type.as_ref() {
+                            return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
+                        }
+                    },
+                    typ => return Err(format!("Cannot map with non-callable type {:?}", typ)),
+                }
+                compiler.write_opcode(OpCode::Map);
+                return Ok(());
+            }
+            return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
+        }
+
+        if left_type != right_type {
+            return Err(format!(
+                "Operands for operator {:?} must be of the same type; got {:?} and {:?}",
+                self.op, left_type, right_type
+            ));
+        }
 
         match left_type {
             Type::Int => {
@@ -602,6 +639,7 @@ impl Expression for Call {
             Ok(Type::Function(_, return_type)) => {
                 Ok(*return_type)
             },
+            Ok(Type::Array(typ)) => Ok(*typ),
             Ok(ctype) => {
                 Err(format!(
                     "Tried to call an expression of type {:?}, which is not callable", ctype
@@ -628,6 +666,7 @@ impl Expression for Call {
         let callee_type = self.callee.get_type()?;
         let (paramtypes, _return_type) = match callee_type {
             Type::Function(argtypes, return_type) => (argtypes, *return_type),
+            Type::Array(typ) => (vec![Type::Int], *typ),
             _ => return Err(format!(
                 "Cannot call an expression of type {:?}", callee_type
             )),

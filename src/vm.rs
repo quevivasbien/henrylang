@@ -180,26 +180,30 @@ impl VM {
         Ok(())
     }
 
-    pub fn array_index(&mut self, arr: &Vec<Value>) -> Result<(), InterpreterError> {
-        unimplemented!("array_index")
-        // let result = match self.stack.pop().expect("Attempted to access array with empty stack") {
-        //     Value::Int(mut idx) => {
-        //         if idx < 0 {
-        //             idx = arr.len() as i64 + idx;
-        //         }
-        //         if idx < 0 || idx >= arr.len() as i64 {
-        //             return Err(self.runtime_err(
-        //                 format!("Index {} out of bounds for array of length {}", idx, arr.len())
-        //             ));
-        //         }
-        //         arr[idx as usize].clone()
-        //     },
-        //     x => return Err(self.runtime_err(
-        //         format!("When accessing array, expected index to be an integer, got {}", x)
-        //     )),
-        // };
-        // self.stack.push(result);
-        // Ok(())
+    fn get_idx(&mut self, arr_len: usize) -> Result<i64, InterpreterError> {
+        let idx = self.stack.pop().expect("Attempted to access array with empty stack");
+        let mut idx = unsafe { idx.i };
+        if idx < 0 {
+            idx = arr_len as i64 + idx;
+        }
+        if idx < 0 || idx >= arr_len as i64 {
+            return Err(self.runtime_err(
+                format!("Index {} out of bounds for array of length {}", idx, arr_len)
+            ));
+        }
+        Ok(idx)
+    }
+    pub fn array_index(&mut self, arr: &[Value]) -> Result<(), InterpreterError> {
+        let idx = self.get_idx(arr.len())?;
+        let result = unsafe { *arr.get_unchecked(idx as usize) };
+        self.stack.push(result);
+        Ok(())
+    }
+    pub fn array_heap_index(&mut self, arr: &[HeapValue]) -> Result<(), InterpreterError> {
+        let idx = self.get_idx(arr.len())?;
+        let result = unsafe { arr.get_unchecked(idx as usize).clone() };
+        self.heap_stack.push(result);
+        Ok(())
     }
 
     pub fn create_object(&mut self, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
@@ -401,7 +405,8 @@ impl VM {
                     match self.heap_stack.pop().expect("Attempted to call with empty stack") {
                         HeapValue::Closure(f) => self.call_function(f)?,
                         HeapValue::NativeFunction(f) => self.call_native_function(f)?,
-                        // HeapValue::Array(arr) => self.array_index(arr.as_ref())?,
+                        HeapValue::Array(arr) => self.array_index(arr.as_ref())?,
+                        HeapValue::ArrayHeap(arr) => self.array_heap_index(arr.as_ref())?,
                         // HeapValue::TypeDef(td) => self.create_object(td)?,
                         // HeapValue::Object(obj) => self.get_field(obj)?,
                         _ => unreachable!()
@@ -418,11 +423,72 @@ impl VM {
                     let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - n_elems as usize));
                     self.heap_stack.push(HeapValue::ArrayHeap(arr));
                 }
-                // OpCode::Map => {
-                //     let args = self.stack.split_off(self.stack.len() - 2);
-                //     let result = (builtins::MAP.function)(self, &args)?;
-                //     self.stack.push(result);
-                // },
+                OpCode::Map => {
+                    let arg = self.heap_stack.pop().expect("Expected argument array on heap stack");
+                    let callee = self.heap_stack.pop().expect("Expected callable on heap stack");
+
+                    match (callee, arg) {
+                        (HeapValue::Closure(f), HeapValue::Array(a)) => {
+                            let n_calls = a.len();
+                            for a in a.iter(){
+                                self.stack.push(*a);
+                                self.call_function(f.clone())?;
+                            }
+                            let arr = Rc::from(self.stack.split_off(self.stack.len() - n_calls as usize));
+                            self.heap_stack.push(HeapValue::Array(arr));
+                        },
+                        (HeapValue::Closure(f), HeapValue::ArrayHeap(a)) => {
+                            let n_calls = a.len();
+                            for a in a.iter(){
+                                self.heap_stack.push(a.clone());
+                                self.call_function(f.clone())?;
+                            }
+                            let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - n_calls as usize));
+                            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+                        },
+                        (HeapValue::NativeFunction(f), HeapValue::Array(a)) => {
+                            let n_calls = a.len();
+                            for a in a.iter(){
+                                self.stack.push(*a);
+                                self.call_native_function(f)?;
+                            }
+                            let arr = Rc::from(self.stack.split_off(self.stack.len() - n_calls as usize));
+                            self.heap_stack.push(HeapValue::Array(arr));
+                        },
+                        (HeapValue::NativeFunction(f), HeapValue::ArrayHeap(a)) => {
+                            let n_calls = a.len();
+                            for a in a.iter(){
+                                self.heap_stack.push(a.clone());
+                                self.call_native_function(f)?;
+                            }
+                            let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - n_calls as usize));
+                            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+                        },
+                        (HeapValue::Array(a), HeapValue::Array(idxs)) => {
+                            let arr = Rc::from(idxs.into_iter().map(|x| {
+                                let idx = unsafe { x.i };
+                                a[idx as usize]
+                            }).collect::<Vec<_>>());
+                            self.heap_stack.push(HeapValue::Array(arr));
+                        },
+                        (HeapValue::ArrayHeap(a), HeapValue::Array(idxs)) => {
+                            let arr = Rc::from(idxs.into_iter().map(|x| {
+                                let idx = unsafe { x.i };
+                                a[idx as usize].clone()
+                            }).collect::<Vec<_>>());
+                            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+                        },
+                        (HeapValue::String(s), HeapValue::Array(idxs)) => {
+                            let s = s.chars().collect::<Vec<_>>();
+                            let arr = Rc::from(idxs.into_iter().map(|x| {
+                                let idx = unsafe { x.i };
+                                HeapValue::String(Rc::new(format!("{}", s[idx as usize])))
+                            }).collect::<Vec<_>>());
+                            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+                        },
+                        _ => unreachable!(),
+                    }
+                },
                 
                 OpCode::SetGlobal => {
                     let name = self.read_heap_constant();

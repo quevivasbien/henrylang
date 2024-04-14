@@ -19,7 +19,6 @@ enum Precedence {
     Factor,
     Unary,
     Call,
-    // Primary,
 }
 
 impl From<u8> for Precedence {
