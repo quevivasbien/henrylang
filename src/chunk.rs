@@ -90,6 +90,7 @@ pub enum OpCode {
     Map,
     Reduce,
     HeapReduce,
+    Filter,
 }
 
 impl From<u8> for OpCode {

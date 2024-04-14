@@ -201,6 +201,10 @@ lazy_static! {
             TokenType::Reduce,
             ParseRule::new(Some(Parser::reduce), None, Precedence::None),
         );
+        map.insert(
+            TokenType::Filter,
+            ParseRule::new(Some(Parser::filter), None, Precedence::None),
+        );
 
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
@@ -737,6 +741,31 @@ impl Parser {
         };
         self.consume(TokenType::RParen, "Expected ')' after 'reduce' arguments.".to_string());
         Box::new(ast::Reduce::new(fn_expr, arr_expr, init_expr))
+    }
+
+    fn filter(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'filter'.".to_string());
+        let fn_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected function as first argument in 'filter' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume_if_match(TokenType::Comma);
+        let arr_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected array as second argument in 'filter' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'filter' arguments.".to_string());
+        Box::new(ast::Filter::new(fn_expr, arr_expr))
     }
 
     fn parse(&mut self, typecontext: TypeContext) -> Box<dyn ast::Expression> {

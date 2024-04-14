@@ -519,7 +519,6 @@ impl Expression for Binary {
         self.right.compile(compiler)?;
 
         if self.op == TokenType::RightArrow {
-            println!("{:?} -> {:?}", left_type, right_type);
             if let Type::Array(arr_type) = &right_type {
                 match &left_type {
                     Type::Array(_) | Type::String => {
@@ -1203,6 +1202,69 @@ impl Expression for Reduce {
         else {
             compiler.write_opcode(OpCode::Reduce);
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Filter {
+    pub function: Box<dyn Expression>,
+    pub array: Box<dyn Expression>,
+    pub parent: Option<*const dyn Expression>,
+}
+
+impl Filter {
+    pub fn new(function: Box<dyn Expression>, array: Box<dyn Expression>) -> Self {
+        Self { function, array, parent: None }
+    }
+}
+
+impl Expression for Filter {
+    fn get_type(&self) -> Result<Type, String> {
+        let (func_arg_type, func_ret_type) = match self.function.get_type()? {
+            Type::Function(arg, ret) => (arg, *ret),
+            x => return Err(format!(
+                "Filter function must be a function; got a {:?}", x
+            )),
+        };
+        if func_arg_type.len() != 1 {
+            return Err(format!(
+                "Filter function must take one argument; got {:?}", func_arg_type
+            ));
+        }
+        let func_arg_type = func_arg_type[0].clone();
+        if func_ret_type != Type::Bool {
+            return Err(format!(
+                "Filter function must return a bool; got {:?}", func_ret_type
+            ));
+        }
+        let array_type = match self.array.get_type()? {
+            Type::Array(x) => *x,
+            x => return Err(format!(
+                "Filter array must be an array; got a {:?}", x
+            ))
+        };
+        if array_type != func_arg_type {
+            return Err(format!(
+                "Filter function argument and array must have the same type; got {:?} and {:?}", func_arg_type, array_type
+            ));
+        }
+        Ok(self.array.get_type()?)
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.function.set_parent(Some(self_ptr));
+        self.array.set_parent(Some(self_ptr));
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.function.compile(compiler)?;
+        self.array.compile(compiler)?;
+        compiler.write_opcode(OpCode::Filter);
         Ok(())
     }
 }

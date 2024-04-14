@@ -653,7 +653,6 @@ impl VM {
                         _ => unreachable!(),
                     }
                 },
-
                 OpCode::HeapReduce => {
                     let init = self.heap_stack.pop().expect("Expected initial value on heap stack");
                     let arr = self.heap_stack.pop().expect("Expected array on heap stack");
@@ -673,6 +672,32 @@ impl VM {
                                 self.heap_stack.push(x.clone());
                                 self.call_native_function(f)?;
                             }
+                        },
+                        _ => unreachable!(),
+                    }
+                },
+
+                OpCode::Filter => {
+                    let arr = self.heap_stack.last().expect("Expected array on top of stack").clone();
+                    self.map()?;
+                    let bool_arr = match self.heap_stack.pop().expect("Expected bool array on stack after mapping through filter function") {
+                        HeapValue::Array(a) => a,
+                        _ => unreachable!(),
+                    };
+                    match arr {
+                        HeapValue::Array(a) => {
+                            let res = a.iter().zip(bool_arr.iter())
+                                .filter(|(_, &b)| unsafe { b.b })
+                                .map(|(&x, _)| x)
+                                .collect::<Vec<_>>();
+                            self.heap_stack.push(HeapValue::Array(Rc::from(res)));
+                        },
+                        HeapValue::ArrayHeap(a) => {
+                            let res = a.iter().zip(bool_arr.iter())
+                                .filter(|(_, &b)| unsafe { b.b })
+                                .map(|(x, _)| x.clone())
+                                .collect::<Vec<_>>();
+                            self.heap_stack.push(HeapValue::ArrayHeap(Rc::from(res)));
                         },
                         _ => unreachable!(),
                     }

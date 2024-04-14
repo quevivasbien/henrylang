@@ -126,6 +126,35 @@ lazy_static! {
             })
         }
     };
+
+    static ref ALL: NativeFunction = NativeFunction {
+        name: "all",
+        arity: 0,
+        heap_arity: 1,
+        return_is_heap: false,
+        function: |_vm, _args, heap_args| {
+            Ok(match &heap_args[0] {
+                HeapValue::Array(arr) => unsafe {
+                    ReturnValue::Value(Value { b: arr.into_iter().all(|x| x.b) })
+                },
+                _ => unreachable!()
+            })
+        }
+    };
+    static ref ANY: NativeFunction = NativeFunction {
+        name: "any",
+        arity: 0,
+        heap_arity: 1,
+        return_is_heap: false,
+        function: |_vm, _args, heap_args| {
+            Ok(match &heap_args[0] {
+                HeapValue::Array(arr) => unsafe {
+                    ReturnValue::Value(Value { b: arr.into_iter().any(|x| x.b) })
+                },
+                _ => unreachable!()
+            })
+        }
+    };
 }
 
 pub fn builtin_types() -> HashMap<String, Type> {
@@ -143,6 +172,9 @@ pub fn builtin_types() -> HashMap<String, Type> {
 
     map.insert("sumf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
     map.insert("prodf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
+
+    map.insert("all".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("any".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
     
     map.insert("E".to_string(), Type::Float);
 
@@ -171,6 +203,9 @@ pub fn heap_builtins() -> HashMap<String, HeapValue> {
 
     map.insert("sumf".to_string(), HeapValue::NativeFunction(&SUMF));
     map.insert("prodf".to_string(), HeapValue::NativeFunction(&PRODF));
+
+    map.insert("all".to_string(), HeapValue::NativeFunction(&ALL));
+    map.insert("any".to_string(), HeapValue::NativeFunction(&ANY));
 
     map
 }

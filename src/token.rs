@@ -47,6 +47,7 @@ pub enum TokenType {
     To,
     Some,
     Reduce,
+    Filter,
 
     Error,
     EoF,
@@ -84,6 +85,7 @@ lazy_static! {
         map.insert("to", TokenType::To);
         map.insert("some", TokenType::Some);
         map.insert("reduce", TokenType::Reduce);
+        map.insert("filter", TokenType::Filter);
 
         map
     };
