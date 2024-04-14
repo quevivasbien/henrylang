@@ -35,8 +35,8 @@ pub enum OpCode {
     BoolEqual,
     BoolNotEqual,
 
-    ArrayEqual,
-    ArrayNotEqual,
+    HeapEqual,
+    HeapNotEqual,
     
     // Binary operations
     IntAdd,
@@ -70,7 +70,6 @@ pub enum OpCode {
     Call,
     Array,
     ArrayHeap,
-    Map,
 
     SetGlobal,
     SetHeapGlobal,
@@ -87,6 +86,10 @@ pub enum OpCode {
 
     WrapSome,
     WrapHeapSome,
+
+    Map,
+    Reduce,
+    HeapReduce,
 }
 
 impl From<u8> for OpCode {

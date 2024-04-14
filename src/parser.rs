@@ -193,6 +193,15 @@ lazy_static! {
             ParseRule::new(Some(Parser::variable), None, Precedence::None),
         );
 
+        map.insert(
+            TokenType::Some,
+            ParseRule::new(Some(Parser::some), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Reduce,
+            ParseRule::new(Some(Parser::reduce), None, Precedence::None),
+        );
+
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
             if map.get(&ttype).is_none() {
@@ -455,8 +464,17 @@ impl Parser {
             }
         }
         if expressions.is_empty() {
-            self.error(Some("Expected at least one expression in block.".to_string()));
-            return Box::new(ast::ErrorExpression{});
+            self.consume(TokenType::Colon, format!(
+                "Type annotation is required after empty block."
+            ));
+            let type_annotation = match self.type_annotation() {
+                Ok(type_annotation) => type_annotation,
+                Err(e) => {
+                    self.error(Some(e));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            };
+            Box::new(ast::Maybe::new_null(type_annotation))
         }
         else {
             match ast::Block::new(expressions) {
@@ -669,6 +687,56 @@ impl Parser {
             None
         };
         Box::new(ast::IfStatement::new(condition, then_branch, else_branch))
+    }
+
+    fn some(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'some'.".to_string());
+        let expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected expression as argument in 'some' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'some' argument.".to_string());
+        Box::new(ast::Maybe::new_some(expr))
+    }
+
+    fn reduce(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'reduce'.".to_string());
+        let fn_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected function as first argument in 'reduce' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume_if_match(TokenType::Comma);
+        let arr_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected array as second argument in 'reduce' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume_if_match(TokenType::Comma);
+        let init_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected initial value as third argument in 'reduce' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'reduce' arguments.".to_string());
+        Box::new(ast::Reduce::new(fn_expr, arr_expr, init_expr))
     }
 
     fn parse(&mut self, typecontext: TypeContext) -> Box<dyn ast::Expression> {

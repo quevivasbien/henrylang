@@ -12,12 +12,13 @@ pub struct Function {
     pub num_heap_upvalues: u16,
     pub arity: u8,
     pub heap_arity: u8,
+    pub return_is_heap: bool,
     pub chunk: Chunk,
 }
 
 impl Default for Function {
     fn default() -> Self {
-        Self { name: String::new(), num_upvalues: 0, num_heap_upvalues: 0, arity: 0, heap_arity: 0, chunk: Chunk::new() }
+        Self { name: String::new(), num_upvalues: 0, num_heap_upvalues: 0, arity: 0, heap_arity: 0, return_is_heap: false, chunk: Chunk::new() }
     }
 }
 
@@ -66,6 +67,7 @@ pub struct NativeFunction {
     pub name: &'static str,
     pub arity: u8,
     pub heap_arity: u8,
+    pub return_is_heap: bool,
     pub function: fn(&mut VM, &[Value], &[HeapValue]) -> Result<ReturnValue, InterpreterError>,
 }
 
@@ -188,6 +190,14 @@ impl std::fmt::Debug for Value {
     }
 }
 
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe {
+            self.i == other.i
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HeapValue {
     String(Rc<String>),
@@ -197,6 +207,20 @@ pub enum HeapValue {
     MaybeHeap(Option<Box<HeapValue>>),
     Closure(Box<Closure>),
     NativeFunction(&'static NativeFunction),
+}
+
+impl PartialEq for HeapValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (HeapValue::String(l), HeapValue::String(r)) => l == r,
+            (HeapValue::Array(l), HeapValue::Array(r)) => l == r,
+            (HeapValue::ArrayHeap(l), HeapValue::ArrayHeap(r)) => l == r,
+            (HeapValue::Maybe(l), HeapValue::Maybe(r)) => l == r,
+            (HeapValue::Closure(l), HeapValue::Closure(r)) => std::ptr::eq(l.function.as_ref(), r.function.as_ref()),
+            (HeapValue::NativeFunction(l), HeapValue::NativeFunction(r)) => std::ptr::eq(l, r),
+            _ => false
+        }
+    }
 }
 
 #[derive(Debug)]

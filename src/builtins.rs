@@ -10,6 +10,7 @@ lazy_static! {
         name: "print",
         arity: 0,
         heap_arity: 1,
+        return_is_heap: true,
         function: |_vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::String(x) => {
@@ -25,6 +26,7 @@ lazy_static! {
         name: "itof",
         arity: 1,
         heap_arity: 0,
+        return_is_heap: false,
         function: |_vm, args, _heap_args| {
             Ok(ReturnValue::Value(unsafe { Value { f: (args[0].i as f64) } }))
         }
@@ -33,6 +35,7 @@ lazy_static! {
         name: "ftoi",
         arity: 1,
         heap_arity: 0,
+        return_is_heap: false,
         function: |_vm, args, _heap_args| {
             Ok(ReturnValue::Value(unsafe { Value { i: (args[0].f as i64) } }))
         }
@@ -42,6 +45,7 @@ lazy_static! {
         name: "mod",
         arity: 2,
         heap_arity: 0,
+        return_is_heap: false,
         function: |_vm, args, _heap_args| {
             Ok(ReturnValue::Value(unsafe { Value { i: (args[0].i.rem_euclid(args[1].i)) } }))
         }
@@ -50,6 +54,7 @@ lazy_static! {
         name: "powi",
         arity: 2,
         heap_arity: 0,
+        return_is_heap: false,
         function: |_vm, args, _heap_args| {
             Ok(ReturnValue::Value(unsafe { Value { i: (args[0].i.pow(args[1].i as u32)) } }))
         }
@@ -58,6 +63,7 @@ lazy_static! {
         name: "powf",
         arity: 2,
         heap_arity: 0,
+        return_is_heap: false,
         function: |_vm, args, _heap_args| {
             Ok(ReturnValue::Value(unsafe { Value { f: (args[0].f.powf(args[1].f)) } }))
         }
@@ -67,6 +73,7 @@ lazy_static! {
         name: "sumi",
         arity: 0,
         heap_arity: 1,
+        return_is_heap: false,
         function: |_vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
@@ -80,10 +87,40 @@ lazy_static! {
         name: "prodi",
         arity: 0,
         heap_arity: 1,
+        return_is_heap: false,
         function: |_vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
                     ReturnValue::Value(Value { i: arr.into_iter().map(|x| x.i).product() })
+                },
+                _ => unreachable!()
+            })
+        }
+    };
+
+    static ref SUMF: NativeFunction = NativeFunction {
+        name: "sumf",
+        arity: 0,
+        heap_arity: 1,
+        return_is_heap: false,
+        function: |_vm, _args, heap_args| {
+            Ok(match &heap_args[0] {
+                HeapValue::Array(arr) => unsafe {
+                    ReturnValue::Value(Value { f: arr.into_iter().map(|x| x.f).sum() })
+                },
+                _ => unreachable!()
+            })
+        }
+    };
+    static ref PRODF: NativeFunction = NativeFunction {
+        name: "prodf",
+        arity: 0,
+        heap_arity: 1,
+        return_is_heap: false,
+        function: |_vm, _args, heap_args| {
+            Ok(match &heap_args[0] {
+                HeapValue::Array(arr) => unsafe {
+                    ReturnValue::Value(Value { f: arr.into_iter().map(|x| x.f).product() })
                 },
                 _ => unreachable!()
             })
@@ -103,6 +140,9 @@ pub fn builtin_types() -> HashMap<String, Type> {
 
     map.insert("sumi".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Int))], Box::new(Type::Int)));
     map.insert("prodi".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Int))], Box::new(Type::Int)));
+
+    map.insert("sumf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("prodf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
     
     map.insert("E".to_string(), Type::Float);
 
@@ -128,6 +168,9 @@ pub fn heap_builtins() -> HashMap<String, HeapValue> {
 
     map.insert("sumi".to_string(), HeapValue::NativeFunction(&SUMI));
     map.insert("prodi".to_string(), HeapValue::NativeFunction(&PRODI));
+
+    map.insert("sumf".to_string(), HeapValue::NativeFunction(&SUMF));
+    map.insert("prodf".to_string(), HeapValue::NativeFunction(&PRODF));
 
     map
 }

@@ -341,6 +341,7 @@ impl Expression for Function {
         }
         inner_compiler.function.arity = self.params.len() as u8 - heap_arity;
         inner_compiler.function.heap_arity = heap_arity;
+        inner_compiler.function.return_is_heap = rtype.is_heap();
         
         for param in self.params.iter() {
             if inner_compiler.create_variable(param.name.clone(), &param.get_type()?)?.is_some() {
@@ -518,6 +519,7 @@ impl Expression for Binary {
         self.right.compile(compiler)?;
 
         if self.op == TokenType::RightArrow {
+            println!("{:?} -> {:?}", left_type, right_type);
             if let Type::Array(arr_type) = &right_type {
                 match &left_type {
                     Type::Array(_) | Type::String => {
@@ -603,12 +605,23 @@ impl Expression for Binary {
             },
             Type::String => {
                 compiler.write_opcode(match self.op {
-                    TokenType::Eq => OpCode::ArrayEqual,
-                    TokenType::NEq => OpCode::ArrayNotEqual,
+                    TokenType::Eq => OpCode::HeapEqual,
+                    TokenType::NEq => OpCode::HeapNotEqual,
                     TokenType::Plus => OpCode::Concat,
                     x => return Err(format!(
                         "Operator {:?} not supported for type {:?}",
                         x, left_type
+                    ))
+                })
+            },
+            Type::Array(t) => {
+                compiler.write_opcode(match self.op {
+                    TokenType::Eq => OpCode::HeapEqual,
+                    TokenType::NEq => OpCode::HeapNotEqual,
+                    TokenType::Plus => OpCode::Concat,
+                    x => return Err(format!(
+                        "Operator {:?} not supported for type {:?}",
+                        x, t
                     ))
                 })
             },
@@ -1061,7 +1074,7 @@ impl Expression for GetField {
 #[derive(Debug)]
 enum MaybeValue {
     Some(Box<dyn Expression>),
-    Null(Type),
+    Null(TypeAnnotation),
 }
 
 #[derive(Debug)]
@@ -1074,7 +1087,7 @@ impl Maybe {
     pub fn new_some(value: Box<dyn Expression>) -> Self {
         Self { value: MaybeValue::Some(value), parent: None }
     }
-    pub fn new_null(typ: Type) -> Self {
+    pub fn new_null(typ: TypeAnnotation) -> Self {
         Self { value: MaybeValue::Null(typ), parent: None }
     }
 }
@@ -1083,7 +1096,7 @@ impl Expression for Maybe {
     fn get_type(&self) -> Result<Type, String> {
         Ok(Type::Maybe(Box::new(match &self.value {
             MaybeValue::Some(e) => e.get_type()?,
-            MaybeValue::Null(t) => t.clone(),
+            MaybeValue::Null(t) => t.get_type()?,
         })))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
@@ -1110,7 +1123,7 @@ impl Expression for Maybe {
                 Ok(())
             },
             MaybeValue::Null(t) => {
-                if t.is_heap() {
+                if t.get_type()?.is_heap() {
                     compiler.write_heap_constant(HeapValue::MaybeHeap(None))
                 }
                 else {
@@ -1118,5 +1131,78 @@ impl Expression for Maybe {
                 }
             },
         }
+    }
+}
+
+
+#[derive(Debug)]
+pub struct Reduce {
+    pub function: Box<dyn Expression>,
+    pub array: Box<dyn Expression>,
+    pub init: Box<dyn Expression>,
+    pub parent: Option<*const dyn Expression>,
+}
+
+impl Reduce {
+    pub fn new(function: Box<dyn Expression>, array: Box<dyn Expression>, init: Box<dyn Expression>) -> Self {
+        Self { function, array, init, parent: None }
+    }
+}
+
+impl Expression for Reduce {
+    fn get_type(&self) -> Result<Type, String> {
+        let (func_arg_type, func_ret_type) = match self.function.get_type()? {
+            Type::Function(arg, ret) => (arg, *ret),
+            x => return Err(format!(
+                "Reduce function must be a function; got a {:?}", x
+            )),
+        };
+        if func_arg_type.len() != 2 {
+            return Err(format!(
+                "Reduce function must take two arguments; got {:?}", func_arg_type
+            ))
+        };
+        let func_arg_type = func_arg_type[0].clone();
+        let array_type = match self.array.get_type()? {
+            Type::Array(x) => *x,
+            x => return Err(format!(
+                "Reduce array must be an array; got a {:?}", x
+            ))
+        };
+        if array_type != func_arg_type {
+            return Err(format!(
+                "Reduce function argument and array must have the same type; got {:?} and {:?}", func_arg_type, array_type
+            ));
+        }
+        let init_type = self.init.get_type()?;
+        if func_ret_type != init_type {
+            return Err(format!(
+                "Reduce function return and init must have the same type; got {:?} and {:?}", func_ret_type, init_type
+            ));
+        }
+        Ok(func_ret_type)
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.function.set_parent(Some(self_ptr));
+        self.array.set_parent(Some(self_ptr));
+        self.init.set_parent(Some(self_ptr));
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.function.compile(compiler)?;
+        self.array.compile(compiler)?;
+        self.init.compile(compiler)?;
+        if self.get_type()?.is_heap() {
+            compiler.write_opcode(OpCode::HeapReduce);
+        }
+        else {
+            compiler.write_opcode(OpCode::Reduce);
+        }
+        Ok(())
     }
 }
