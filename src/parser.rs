@@ -205,6 +205,18 @@ lazy_static! {
             TokenType::Filter,
             ParseRule::new(Some(Parser::filter), None, Precedence::None),
         );
+        map.insert(
+            TokenType::Len,
+            ParseRule::new(Some(Parser::len), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::ZipMap,
+            ParseRule::new(Some(Parser::zipmap), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Unwrap,
+            ParseRule::new(Some(Parser::unwrap), None, Precedence::None),
+        );
 
         // define default rules
         for ttype in enum_iterator::all::<TokenType>() {
@@ -768,10 +780,80 @@ impl Parser {
         Box::new(ast::Filter::new(fn_expr, arr_expr))
     }
 
+    fn len(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'len'.".to_string());
+        let expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected expression as argument in 'len' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'len' argument.".to_string());
+        Box::new(ast::Len::new(expr))
+    }
+
+    fn zipmap(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'zipmap'.".to_string());
+        let fn_expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected function as first argument in 'zipmap' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume_if_match(TokenType::Comma);
+        let mut exprs = Vec::new();
+        while !self.consume_if_match(TokenType::RParen) {
+            let expr = match self.expression() {
+                Some(expr) => expr,
+                None => {
+                    self.error(Some(
+                        format!("Expected expression as argument in 'zipmap' expression.")
+                    ));
+                    return Box::new(ast::ErrorExpression{});
+                }
+            };
+            exprs.push(expr);
+            self.consume_if_match(TokenType::Comma);
+        }
+        Box::new(ast::ZipMap::new(fn_expr, exprs))
+    }
+
+    fn unwrap(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'unwrap'.".to_string());
+        let value = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected expression as argument in 'unwrap' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume_if_match(TokenType::Comma);
+        let default = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected default value as second argument in 'unwrap' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'unwrap' argument.".to_string());
+        Box::new(ast::Unwrap::new(value, default))
+    }
+
     fn parse(&mut self, typecontext: TypeContext) -> Box<dyn ast::Expression> {
         let block = self.block();
         let mut top_level = Box::new(ast::ASTTopLevel::new(typecontext, block));
         top_level.set_parent(None);
+        println!("top_level: {:?}", top_level);
         top_level
     }
 }

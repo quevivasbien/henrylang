@@ -48,6 +48,9 @@ pub enum TokenType {
     Some,
     Reduce,
     Filter,
+    Len,
+    ZipMap,
+    Unwrap,
 
     Error,
     EoF,
@@ -86,6 +89,9 @@ lazy_static! {
         map.insert("some", TokenType::Some);
         map.insert("reduce", TokenType::Reduce);
         map.insert("filter", TokenType::Filter);
+        map.insert("len", TokenType::Len);
+        map.insert("zipmap", TokenType::ZipMap);
+        map.insert("unwrap", TokenType::Unwrap);
 
         map
     };

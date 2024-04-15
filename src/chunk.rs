@@ -84,13 +84,19 @@ pub enum OpCode {
     GetUpvalue,
     GetHeapUpvalue,
 
+    // Maybe ops
     WrapSome,
     WrapHeapSome,
+    Unwrap,
+    UnwrapHeap,
 
+    // Array ops
     Map,
     Reduce,
     HeapReduce,
     Filter,
+    Len,
+    ZipMap,
 }
 
 impl From<u8> for OpCode {

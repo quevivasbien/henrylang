@@ -165,6 +165,7 @@ impl TypeAnnotation {
     }
 
     fn get_type(&self) -> Result<Type, String> {
+        // TODO: Get this to work properly for user-defined types
         if self.children.is_empty() {
             return Type::from_str(self.typename.as_str())
         }
@@ -1140,6 +1141,56 @@ impl Expression for Maybe {
     }
 }
 
+#[derive(Debug)]
+pub struct Unwrap {
+    value: Box<dyn Expression>,
+    default: Box<dyn Expression>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl Unwrap {
+    pub fn new(value: Box<dyn Expression>, default: Box<dyn Expression>) -> Self {
+        Self { value, default, parent: None }
+    }
+}
+
+impl Expression for Unwrap {
+    fn get_type(&self) -> Result<Type, String> {
+        // TODO: Type inference hangs when resolving variable within unwrap        return Ok(Type::Int)
+        let inner_type = match self.value.get_type()? {
+            Type::Maybe(t) => *t,
+            x => return Err(format!("Unwrap expected Maybe, got {:?}", x))
+        };
+        let default_type = self.default.get_type()?;
+        if inner_type != default_type {
+            return Err(format!("Unwrap default does not match inner type, got default {:?} and inner type {:?}", default_type, inner_type));
+        }
+        Ok(inner_type)
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.value.set_parent(Some(self_ptr));
+        self.default.set_parent(Some(self_ptr));
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let typ = self.get_type()?;
+        self.default.compile(compiler)?;
+        self.value.compile(compiler)?;
+        if typ.is_heap() {
+            compiler.write_opcode(OpCode::UnwrapHeap);
+        }
+        else {
+            compiler.write_opcode(OpCode::Unwrap);
+        }
+        Ok(())
+    }
+}
+
 
 #[derive(Debug)]
 pub struct Reduce {
@@ -1272,6 +1323,106 @@ impl Expression for Filter {
         self.function.compile(compiler)?;
         self.array.compile(compiler)?;
         compiler.write_opcode(OpCode::Filter);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct Len {
+    expr: Box<dyn Expression>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl Len {
+    pub fn new(expr: Box<dyn Expression>) -> Self {
+        Self { expr, parent: None }
+    }
+}
+
+impl Expression for Len {
+    fn get_type(&self) -> Result<Type, String> {
+        match self.expr.get_type()? {
+            Type::Array(_) | Type::String => Ok(Type::Int),
+            x => Err(format!(
+                "Len expression must be an array or string; got a {:?}", x
+            )),
+        }
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.expr.set_parent(Some(self_ptr));
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.get_type()?;  // just to check that inner type is an array
+        self.expr.compile(compiler)?;
+        compiler.write_opcode(OpCode::Len);
+        Ok(())
+    }
+}
+
+
+#[derive(Debug)]
+pub struct ZipMap {
+    function: Box<dyn Expression>,
+    exprs: Vec<Box<dyn Expression>>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl ZipMap {
+    pub fn new(fn_expr: Box<dyn Expression>, exprs: Vec<Box<dyn Expression>>) -> Self {
+        Self { function: fn_expr, exprs, parent: None }
+    }
+}
+
+impl Expression for ZipMap {
+    fn get_type(&self) -> Result<Type, String> {
+        let (func_arg_types, func_ret_type) = match self.function.get_type()? {
+            Type::Function(arg, ret) => (arg, *ret),
+            x => return Err(format!(
+                "ZipMap function must be a function; got a {:?}", x
+            ))
+        };
+        let mut expr_types = Vec::new();
+        for expr in self.exprs.iter() {
+            match expr.get_type()? {
+                Type::Array(t) => expr_types.push(*t),
+                x => return Err(format!(
+                    "ZipMap expression must be an array; got a {:?}", x
+                ))
+            }
+        }
+        if func_arg_types != expr_types {
+            return Err(format!(
+                "ZipMap function argument and arrays must have matching types; got {:?} and {:?}", func_arg_types, expr_types
+            ));
+        }
+        Ok(Type::Array(Box::new(func_ret_type)))
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.function.set_parent(Some(self_ptr));
+        for expr in self.exprs.iter_mut() {
+            expr.set_parent(Some(self_ptr));
+        }
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        self.get_type()?;  // check that types are all in order
+        for expr in self.exprs.iter() {
+            expr.compile(compiler)?;
+        }
+        compiler.write_constant(Value { i: self.exprs.len() as i64 })?;
+        self.function.compile(compiler)?;
+        compiler.write_opcode(OpCode::ZipMap);
         Ok(())
     }
 }

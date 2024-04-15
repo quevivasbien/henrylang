@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::UNIX_EPOCH;
 
 use lazy_static::lazy_static;
 
@@ -19,6 +20,16 @@ lazy_static! {
                 },
                 _ => unreachable!()
             })
+        }
+    };
+    static ref TIME: NativeFunction = NativeFunction {
+        name: "time",
+        arity: 0,
+        heap_arity: 0,
+        return_is_heap: false,
+        function: |_vm, _args, _heap_args| {
+            let now = UNIX_EPOCH.elapsed().unwrap().as_micros();
+            Ok(ReturnValue::Value(Value { i: now as i64 }))
         }
     };
 
@@ -160,6 +171,7 @@ lazy_static! {
 pub fn builtin_types() -> HashMap<String, Type> {
     let mut map = HashMap::new();
     map.insert("print".to_string(), Type::Function(vec![Type::String], Box::new(Type::String)));
+    map.insert("time".to_string(), Type::Function(vec![], Box::new(Type::Int)));
     map.insert("itof".to_string(), Type::Function(vec![Type::Int], Box::new(Type::Float)));
     map.insert("ftoi".to_string(), Type::Function(vec![Type::Float], Box::new(Type::Int)));
 
@@ -191,6 +203,7 @@ pub fn builtins() -> HashMap<String, Value> {
 pub fn heap_builtins() -> HashMap<String, HeapValue> {
     let mut map = HashMap::new();
     map.insert("print".to_string(), HeapValue::NativeFunction(&PRINT));
+    map.insert("time".to_string(), HeapValue::NativeFunction(&TIME));
     map.insert("itof".to_string(), HeapValue::NativeFunction(&ITOF));
     map.insert("ftoi".to_string(), HeapValue::NativeFunction(&FTOI));
 

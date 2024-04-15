@@ -337,8 +337,8 @@ impl VM {
             {
                 print!("stack: {:?}, ", &self.stack[self.frame().stack_idx..]);
                 print!("heap_stack: {:?}, ", &self.heap_stack[self.frame().heap_stack_idx..]);
-                print!("globals: {:?}, ", self.globals);
-                print!("heap globals: {:?}, ", self.heap_globals);
+                // print!("globals: {:?}, ", self.globals);
+                // print!("heap globals: {:?}, ", self.heap_globals);
                 let mut ip_copy = self.frame().ip;
                 self.chunk().disassemble_instruction(&mut ip_copy);
             }
@@ -368,6 +368,8 @@ impl VM {
                 },
 
                 // Boolean ops
+                OpCode::BoolEqual => self.binary_bool_op(|x, y| x == y),
+                OpCode::BoolNotEqual => self.binary_bool_op(|x, y| x != y),
                 OpCode::And => self.binary_bool_op(|x, y| x && y),
                 OpCode::Or => self.binary_bool_op(|x, y| x || y),
                 OpCode::Not => self.unary_bool_op(|x| !x),
@@ -623,6 +625,39 @@ impl VM {
                     let value = self.heap_stack.pop().expect("Attempted to wrap with empty stack");
                     self.heap_stack.push(HeapValue::MaybeHeap(Some(Box::new(value))));
                 },
+                OpCode::Unwrap => {
+                    let value = self.heap_stack.pop().expect("Attempted to unwrap with empty stack");
+                    match value {
+                        HeapValue::Maybe(Some(x)) => {
+                            self.stack.pop().expect("Expected default value on top of stack");
+                            self.stack.push(x);
+                        },
+                        HeapValue::Maybe(None) => (),  // default should be on top of stack, so we can just leave it there
+                        _ => unreachable!(),
+                    }
+                },
+                OpCode::UnwrapHeap => {
+                    let value = self.heap_stack.pop().expect("Attempted to unwrap with empty stack");
+                    match value {
+                        HeapValue::MaybeHeap(Some(x)) => {
+                            self.heap_stack.pop().expect("Expected default value on top of heap stack");
+                            self.heap_stack.push(*x);
+                        },
+                        HeapValue::MaybeHeap(None) => (),  // default should be on top of stack, so we can just leave it there
+                        _ => unreachable!(),
+                    }
+                },
+
+                OpCode::Len => {
+                    let value = self.heap_stack.pop().expect("Expected value on stack");
+                    let len = match value {
+                        HeapValue::Array(a) => a.len(),
+                        HeapValue::ArrayHeap(a) => a.len(),
+                        HeapValue::String(s) => s.len(),
+                        _ => unreachable!(),
+                    };
+                    self.stack.push(Value { i: len as i64 });
+                }
 
                 OpCode::Map => self.map()?,
 
@@ -699,6 +734,53 @@ impl VM {
                     }
                 },
 
+                OpCode::ZipMap => {
+                    let f = self.heap_stack.pop().expect("Expected function on heap stack");
+                    let n_arrays = unsafe { self.stack.pop().expect("Expected number of arrays on stack").i };
+                    let mut arrays = Vec::new();
+                    let mut heap_arrays = Vec::new();
+                    for _ in 0..n_arrays {
+                        let arr = self.heap_stack.pop().expect("Expected array on heap stack");
+                        match arr {
+                            HeapValue::Array(a) => arrays.push(a),
+                            HeapValue::ArrayHeap(a) => heap_arrays.push(a),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let min_len = usize::min(
+                        arrays.iter().map(|a| a.len()).min().unwrap_or(usize::MAX),
+                        heap_arrays.iter().map(|a| a.len()).min().unwrap_or(usize::MAX),
+                    );
+                    for i in 0..min_len {
+                        for arr in arrays.iter().rev() {
+                            self.stack.push(arr[i]);
+                        }
+                        for arr in heap_arrays.iter().rev() {
+                            self.heap_stack.push(arr[i].clone());
+                        }
+                        match &f {
+                            HeapValue::Closure(f) => self.call_function(f.clone())?,
+                            HeapValue::NativeFunction(f) => self.call_native_function(f)?,
+                            HeapValue::TypeDef(td) => self.create_object(td.clone())?,
+                            _ => unreachable!(),
+                        }
+                    }
+                    let is_heap = match &f {
+                        HeapValue::Closure(f) => f.function.return_is_heap,
+                        HeapValue::NativeFunction(f) => f.return_is_heap,
+                        HeapValue::TypeDef(_) => true,
+                        _ => unreachable!(),
+                    };
+                    let result = if is_heap {
+                        HeapValue::ArrayHeap(Rc::from(self.heap_stack.split_off(self.heap_stack.len() - min_len)))
+                    }
+                    else {
+                        HeapValue::Array(Rc::from(self.stack.split_off(self.stack.len() - min_len)))
+                    };
+                    self.heap_stack.push(result);
+                },
+
+                #[allow(unreachable_patterns)]
                 _ => unimplemented!("Opcode {:?} not implemented", opcode),
             }
         }
