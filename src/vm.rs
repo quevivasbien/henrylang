@@ -207,45 +207,41 @@ impl VM {
     }
 
     pub fn create_object(&mut self, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
-        unimplemented!("create_object")
-        // let mut fields = HashMap::new();
-        // for name in typedef.fieldnames.iter().cloned().rev() {
-        //     let value = self.stack.pop().expect("Call to create_object resulted in empty stack");
-        //     fields.insert(name, value);
-        // }
-        // self.stack.push(Value::Object(Rc::new(Object::new(typedef, fields))));
-        // Ok(())
+        let mut fields = HashMap::new();
+        let mut heap_fields = HashMap::new();
+        for (fieldname, is_heap) in typedef.fields.iter().cloned().rev() {
+            if is_heap {
+                let value = self.heap_stack.pop().expect("Call to create_object resulted in empty stack");
+                heap_fields.insert(fieldname, value);
+            }
+            else {
+                let value = self.stack.pop().expect("Call to create_object resulted in empty stack");
+                fields.insert(fieldname, value);
+            }
+        }
+        let obj = Object::new(typedef, fields, heap_fields);
+        self.heap_stack.push(HeapValue::Object(Rc::new(obj)));
+        Ok(())
     }
 
     pub fn get_field(&mut self, obj: Rc<Object>) -> Result<(), InterpreterError> {
-        unimplemented!("get_field")
-        // let result = match self.stack.pop().expect("Attempted to access field with empty stack") {
-        //     Value::String(name) => {
-        //         match obj.fields.get(name.as_ref()) {
-        //             Some(x) => x.clone(),
-        //             None => return Err(self.runtime_err(
-        //                 format!("Field {} not found in {}", name, obj)
-        //             )),
-        //         }
-        //     },
-        //     Value::Int(mut idx) => {
-        //         if idx < 0 {
-        //             idx = obj.fields.len() as i64 + idx;
-        //         }
-        //         if idx < 0 || idx >= obj.fields.len() as i64 {
-        //             return Err(self.runtime_err(
-        //                 format!("Field index {} out of bounds for object of size {}", idx, obj.fields.len())
-        //             ));
-        //         }
-        //         let fieldname = &obj.typedef.fieldnames[idx as usize];
-        //         obj.fields.get(fieldname).unwrap().clone()
-        //     },
-        //     x => return Err(self.runtime_err(
-        //         format!("When accessing field, expected field name to be a string or integer, got {}", x)
-        //     )),
-        // };
-        // self.stack.push(result);
-        // Ok(())
+        let fieldname = self.heap_stack.pop().expect("Attempted to access field with empty stack");
+        let fieldname = match fieldname {
+            HeapValue::String(name) => name,
+            _ => unreachable!()
+        };
+        let is_heap = unsafe {
+            self.stack.pop().expect("Attempted to access heap indicator with empty stack").b
+        };
+        if is_heap {
+            let result = obj.heap_fields.get(fieldname.as_ref()).unwrap().clone();
+            self.heap_stack.push(result);
+        }
+        else {
+            let result = *obj.fields.get(fieldname.as_ref()).unwrap();
+            self.stack.push(result);
+        }
+        Ok(())
     }
 
     fn push_map_result(&mut self, len: usize, is_heap: bool) {
@@ -492,8 +488,8 @@ impl VM {
                         HeapValue::NativeFunction(f) => self.call_native_function(f)?,
                         HeapValue::Array(arr) => self.array_index(arr.as_ref())?,
                         HeapValue::ArrayHeap(arr) => self.array_heap_index(arr.as_ref())?,
-                        // HeapValue::TypeDef(td) => self.create_object(td)?,
-                        // HeapValue::Object(obj) => self.get_field(obj)?,
+                        HeapValue::TypeDef(td) => self.create_object(td)?,
+                        HeapValue::Object(obj) => self.get_field(obj)?,
                         _ => unreachable!()
                     };
                 },
@@ -746,8 +742,11 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
         (HeapValue::Maybe(x), ast::Type::Maybe(typ)) => {
             TaggedValue::from_maybe(x, typ.as_ref())
         },
-        (HeapValue::MaybeHeap(_x), ast::Type::Maybe(_typ)) => {
-            Err("Unimplemented: unpack_heapvalue: MaybeHeap".to_string())
+        (HeapValue::MaybeHeap(x), ast::Type::Maybe(typ)) => {
+            match x {
+                Some(x) => Ok(TaggedValue::Maybe(Some(Box::new(unpack_heapvalue(*x, typ.as_ref())?)))),
+                None => Ok(TaggedValue::Maybe(None)),
+            }
         },
         (HeapValue::ArrayHeap(arr), ast::Type::Array(typ)) => {
             match typ.as_ref() {
@@ -773,6 +772,32 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
         },
         (HeapValue::Closure(f), ast::Type::Function(..)) => {
             Ok(TaggedValue::Closure(f))
+        },
+        (HeapValue::TypeDef(t), _) => {
+            Ok(TaggedValue::TypeDef(t))
+        },
+        (HeapValue::Object(obj), ast::Type::Object(name, fields)) => {
+            let heap_fields = fields.iter().filter(|(_, v)| {
+                v.is_heap()
+            }).map(|(_, v)| {
+                v.clone()
+            });
+            let nonheap_fields = fields.iter().filter(|(_, v)| {
+                !v.is_heap()
+            }).map(|(_, v)| {
+                v.clone()
+            });
+            let mut fields = HashMap::new();
+            for ((n, v), t) in obj.fields.iter().zip(nonheap_fields) {
+                let x = TaggedValue::from_value(*v, &t)?;
+                fields.insert(n.clone(), x);
+            }
+            for ((n, v), t) in obj.heap_fields.iter().zip(heap_fields) {
+                let x = unpack_heapvalue(v.clone(), &t)?;
+                fields.insert(n.clone(), x);
+            }
+
+            Ok(TaggedValue::Object(name.clone(), fields))
         },
         (x, rt) => return Err(
             format!(

@@ -85,16 +85,16 @@ impl Display for NativeFunction {
 
 pub struct TypeDef {
     pub name: String,
-    pub fieldnames: Vec<String>,
+    pub fields: Vec<(String, bool)>,
 }
 
 impl Debug for TypeDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.name.is_empty() {
-            write!(f, "{{ {:?} }}", self.fieldnames)
+            write!(f, "{{ {:?} }}", self.fields)
         }
         else {
-            write!(f, "{} {{ {:?} }}", self.name, self.fieldnames)
+            write!(f, "{} {{ {:?} }}", self.name, self.fields)
         }
     }
 }
@@ -107,7 +107,7 @@ impl Display for TypeDef {
         else {
             write!(f, "{} {{", self.name)?;
         }
-        for field in &self.fieldnames {
+        for (field, _) in &self.fields {
             write!(f, " {}", field)?;
         }
         write!(f, " }}")
@@ -115,26 +115,27 @@ impl Display for TypeDef {
 }
 
 impl TypeDef {
-    pub fn new(name: String, fieldnames: Vec<String>) -> Self {
-        Self { name, fieldnames }
+    pub fn new(name: String, fields: Vec<(String, bool)>) -> Self {
+        Self { name, fields }
     }
 }
 
 pub struct Object {
     pub typedef: Rc<TypeDef>,
     pub fields: HashMap<String, Value>,
+    pub heap_fields: HashMap<String, HeapValue>,
 }
 
-// impl Debug for Object {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         if self.typedef.name.is_empty() {
-//             write!(f, "{:?}", self.fields)
-//         }
-//         else {
-//             write!(f, "{} {:?}", self.typedef, self.fields)
-//         }
-//     }
-// }
+impl Debug for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.typedef.name.is_empty() {
+            write!(f, "{:?} {:?}", self.fields, self.heap_fields)
+        }
+        else {
+            write!(f, "{} {:?} {:?}", self.typedef, self.fields, self.heap_fields)
+        }
+    }
+}
 
 // impl Display for Object {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -152,8 +153,8 @@ pub struct Object {
 // }
 
 impl Object {
-    pub fn new(typedef: Rc<TypeDef>, fields: HashMap<String, Value>) -> Self {
-        Self { typedef, fields }
+    pub fn new(typedef: Rc<TypeDef>, fields: HashMap<String, Value>, heap_fields: HashMap<String, HeapValue>) -> Self {
+        Self { typedef, fields, heap_fields }
     }
 }
 
@@ -163,7 +164,6 @@ pub union Value {
     pub f: f64,
     pub b: bool,
     pub p: *const Rc<[Value]>, // pointer to an value stored in local simulated heap
-    pub null: (),
 }
 
 impl Value {
@@ -175,9 +175,6 @@ impl Value {
     }
     pub fn from_bool(b: bool) -> Self {
         Self { b }
-    }
-    pub fn from_none() -> Self {
-        Self { null: () }
     }
 }
 
@@ -207,6 +204,8 @@ pub enum HeapValue {
     MaybeHeap(Option<Box<HeapValue>>),
     Closure(Box<Closure>),
     NativeFunction(&'static NativeFunction),
+    TypeDef(Rc<TypeDef>),
+    Object(Rc<Object>),
 }
 
 impl PartialEq for HeapValue {
@@ -238,6 +237,8 @@ pub enum TaggedValue {
     Array(Vec<TaggedValue>),
     Maybe(Option<Box<TaggedValue>>),
     Closure(Box<Closure>),
+    TypeDef(Rc<TypeDef>),
+    Object(String, HashMap<String, TaggedValue>),
 }
 
 impl Display for TaggedValue {
@@ -264,6 +265,17 @@ impl Display for TaggedValue {
                 }
             },
             TaggedValue::Closure(closure) => write!(f, "{}", closure),
+            TaggedValue::TypeDef(typedef) => write!(f, "{}", typedef),
+            TaggedValue::Object(name, fields) => {
+                write!(f, "{} {{ ", name)?;
+                for (i, (k, v)) in fields.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", k, v)?;
+                }
+                write!(f, " }}")
+            }
         }
     }
 }

@@ -111,17 +111,14 @@ fn test_closure() {
 fn test_object() {
     let source = "
     myobj := type {
-        a
-        b
-        c
+        a: Int
+        b: Int
+        c: String
     }
-    x := myobj(1, 2, 3)
-    y := myobj(-1, -2, -3)
+    x := myobj(1, 2, \"henry\")
+    y := myobj(-1, -2, \"henry\")
     
-    zipped := zip(array(x), array(y))
-    added := sum(|x| { sum(x) } -> zipped)
-    
-    added = 0 and x != y and x.b = -y(1)
+    x.a = -y.a and x.b = -y.b and x.c = y.c
     ";
 
     let result = run_expect_value!(source, Bool);

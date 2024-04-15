@@ -1,8 +1,10 @@
+use std::rc::Rc;
+
 use downcast_rs::{impl_downcast, Downcast};
 
 use crate::compiler::{Compiler, TypeContext};
 use crate::chunk::OpCode;
-use crate::values::{HeapValue, Value};
+use crate::values::{self, HeapValue, Value};
 use crate::token::TokenType;
 
 // struct CompileError(String);
@@ -1013,12 +1015,14 @@ impl Expression for TypeDef {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        unimplemented!("TypeDef::compile")
-        // let fieldnames = self.fields.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
-        // let typedef = Value::TypeDef(Rc::new(
-        //     values::TypeDef::new(self.name.clone(), fieldnames)
-        // ));
-        // compiler.write_constant(typedef)
+        let mut fields = Vec::new();
+        for f in self.fields.iter() {
+            fields.push((f.name.clone(), f.get_type()?.is_heap()));
+        }
+        let typedef = HeapValue::TypeDef(Rc::new(
+            values::TypeDef::new(self.name.clone(), fields)
+        ));
+        compiler.write_heap_constant(typedef)
     }
 }
 
@@ -1064,9 +1068,12 @@ impl Expression for GetField {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let typ = self.get_type()?;  // todo: use this
+        let typ = self.get_type()?;
+        compiler.write_constant(Value { b: typ.is_heap() })?;
+        compiler.write_string(self.field.clone())?;
         self.object.compile(compiler)?;
-        compiler.write_string(self.field.clone())
+        compiler.write_opcode(OpCode::Call);
+        Ok(())
     }
 }
 
