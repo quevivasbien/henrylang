@@ -7,9 +7,9 @@ use crate::ast;
 use crate::builtins;
 use crate::chunk::{Chunk, OpCode};
 use crate::compiler;
-use crate::values::{Closure, Function, HeapValue, NativeFunction, Object, ReturnValue, TaggedValue, TypeDef, Value};
+use crate::values::{ArrayIter, Closure, Function, HeapValue, LazyIter, MapIter, MapIterHeap, MapIterNative, MapIterNativeHeap, NativeFunction, Object, RangeIter, ReturnValue, ReverseRangeIter, TaggedValue, TypeDef, Value};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InterpreterError {
     CompileError(String),
     RuntimeError(String),
@@ -251,12 +251,20 @@ impl VM {
 
     fn push_map_result(&mut self, len: usize, is_heap: bool) {
         if is_heap {
-            let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - len));
-            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+            let lazy_iter = Box::new(
+                ArrayIter::new(Rc::from(
+                    self.heap_stack.split_off(self.heap_stack.len() - len)
+                ))
+            );
+            self.heap_stack.push(HeapValue::LazyIterHeap(lazy_iter));
         }
         else {
-            let arr = Rc::from(self.stack.split_off(self.stack.len() - len));
-            self.heap_stack.push(HeapValue::Array(arr));
+            let lazy_iter = Box::new(
+                ArrayIter::new(Rc::from(
+                    self.stack.split_off(self.stack.len() - len)
+                ))
+            );
+            self.heap_stack.push(HeapValue::LazyIter(lazy_iter));
         }
     }
 
@@ -265,6 +273,29 @@ impl VM {
         let callee = self.heap_stack.pop().expect("Expected callable on heap stack");
 
         match (callee, arg) {
+            // Closure -> LazyIter
+            (HeapValue::Closure(f), HeapValue::LazyIter(iter)) => {
+                if f.function.return_is_heap {
+                    let map_iter = Box::new(MapIterHeap::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+                }
+                else {
+                    let map_iter = Box::new(MapIter::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIter(map_iter));
+                }
+            },
+            // Closure -> LazyIterHeap
+            (HeapValue::Closure(f), HeapValue::LazyIterHeap(iter)) => {
+                if f.function.return_is_heap {
+                    let map_iter = Box::new(MapIterHeap::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+                }
+                else {
+                    let map_iter = Box::new(MapIter::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIter(map_iter));
+                }
+            },
+            // Closure -> Array
             (HeapValue::Closure(f), HeapValue::Array(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -273,6 +304,7 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.function.return_is_heap);
             },
+            // Closure -> ArrayHeap
             (HeapValue::Closure(f), HeapValue::ArrayHeap(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -281,6 +313,17 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.function.return_is_heap);
             },
+            // NativeFunction -> LazyIter
+            (HeapValue::NativeFunction(f), HeapValue::LazyIter(iter)) => {
+                let map_iter = Box::new(MapIterNative::new(iter, f, self));
+                self.heap_stack.push(HeapValue::LazyIter(map_iter));
+            },
+            // NativeFunction -> LazyIterHeap
+            (HeapValue::NativeFunction(f), HeapValue::LazyIterHeap(iter)) => {
+                let map_iter = Box::new(MapIterNativeHeap::new(iter, f, self));
+                self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+            },
+            // NativeFunction -> Array
             (HeapValue::NativeFunction(f), HeapValue::Array(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -289,6 +332,7 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.return_is_heap);
             },
+            // NativeFunction -> ArrayHeap
             (HeapValue::NativeFunction(f), HeapValue::ArrayHeap(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -297,6 +341,7 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.return_is_heap);
             },
+            // Array -> Array of indices
             (HeapValue::Array(a), HeapValue::Array(idxs)) => {
                 let arr = Rc::from(idxs.into_iter().map(|x| {
                     let idx = unsafe { x.i };
@@ -304,6 +349,7 @@ impl VM {
                 }).collect::<Vec<_>>());
                 self.heap_stack.push(HeapValue::Array(arr));
             },
+            // ArrayHeap -> Array of indices
             (HeapValue::ArrayHeap(a), HeapValue::Array(idxs)) => {
                 let arr = Rc::from(idxs.into_iter().map(|x| {
                     let idx = unsafe { x.i };
@@ -311,6 +357,7 @@ impl VM {
                 }).collect::<Vec<_>>());
                 self.heap_stack.push(HeapValue::ArrayHeap(arr));
             },
+            // String -> Array of indices
             (HeapValue::String(s), HeapValue::Array(idxs)) => {
                 let s = s.chars().collect::<Vec<_>>();
                 let arr = Rc::from(idxs.into_iter().map(|x| {
@@ -330,11 +377,12 @@ impl VM {
         }
         #[cfg(feature = "debug")]
         {
-            // println!("==call {:?}==", self.frame().closure);
+            println!("==call {:?}==", self.frame().closure);
             self.chunk().disassemble();
             println!("");
         }
         loop {
+            #[cfg(feature = "debug")]
             if self.frame().ip >= self.chunk().len() {
                 panic!("Reached end of chunk with no return");
             }
@@ -392,13 +440,13 @@ impl VM {
                     let (r, l) = unsafe {
                         (r.i, l.i)
                     };
-                    let arr: Vec<_> = if r >= l {
-                        (l..=r).map(|i| Value { i }).collect()
+                    let lazy_iter: Box<dyn LazyIter<Value>> = if r >= l {
+                        Box::new(RangeIter::new(l, r))
                     }
                     else {
-                        (r..=l).rev().map(|i| Value { i }).collect()
+                        Box::new(ReverseRangeIter::new(r, l))
                     };
-                    self.heap_stack.push(HeapValue::Array(Rc::from(arr)));
+                    self.heap_stack.push(HeapValue::LazyIter(lazy_iter));
                 }
 
                 // Float ops
@@ -823,6 +871,14 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
     match (hvalue, return_type) {
         (HeapValue::Array(arr), ast::Type::Array(typ)) => {
             Ok(TaggedValue::from_array(&arr, typ.as_ref()))
+        },
+        (HeapValue::LazyIter(iter), ast::Type::Iterator(typ)) => {
+            let arr = iter.clone().into_array();
+            unpack_heapvalue(HeapValue::Array(arr), &ast::Type::Array(typ.clone()))
+        },
+        (HeapValue::LazyIterHeap(iter), ast::Type::Iterator(typ)) => {
+            let arr = iter.clone().into_array();
+            unpack_heapvalue(HeapValue::ArrayHeap(arr), &ast::Type::Array(typ.clone()))
         },
         (HeapValue::String(s), ast::Type::String) => {
             Ok(TaggedValue::String(s.as_ref().clone()))

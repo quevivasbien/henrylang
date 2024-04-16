@@ -17,6 +17,7 @@ pub enum Type {
     String,
     Bool,
     Array(Box<Type>),
+    Iterator(Box<Type>),
     Maybe(Box<Type>),
     Function(Vec<Type>, Box<Type>),
     Object(String, Vec<(String, Type)>)
@@ -24,7 +25,7 @@ pub enum Type {
 
 impl Type {
     pub fn is_heap(&self) -> bool {
-        matches!(self, Self::String | Self::Array(_) | Self::Maybe(_) | Self::Function(_, _) | Self::Object(_, _))
+        matches!(self, Self::String | Self::Array(_) | Self::Iterator(_) | Self::Maybe(_) | Self::Function(_, _) | Self::Object(_, _))
     }
 }
 
@@ -536,13 +537,13 @@ impl Expression for Binary {
             | TokenType::LEq
             | TokenType::GT
             | TokenType::LT => Ok(Type::Bool),
-            TokenType::To => Ok(Type::Array(Box::new(Type::Int))),
+            TokenType::To => Ok(Type::Iterator(Box::new(Type::Int))),
             TokenType::RightArrow => {
                 let left_type = self.left.get_type()?;
                 match left_type {
-                    Type::Function(_, typ) => Ok(Type::Array(Box::new(*typ))),
-                    Type::Array(typ) => Ok(Type::Array(Box::new(*typ))),
-                    Type::String => Ok(Type::Array(Box::new(Type::String))),
+                    Type::Function(_, typ) => Ok(Type::Iterator(Box::new(*typ))),
+                    Type::Array(typ) => Ok(Type::Iterator(Box::new(*typ))),
+                    Type::String => Ok(Type::Iterator(Box::new(Type::String))),
                     typ => Err(format!("Cannot use '->' on type {:?}", typ))
                 }
             }
@@ -567,7 +568,7 @@ impl Expression for Binary {
         self.right.compile(compiler)?;
 
         if self.op == TokenType::RightArrow {
-            if let Type::Array(arr_type) = &right_type {
+            if let Type::Iterator(arr_type) | Type::Array(arr_type) = &right_type {
                 match &left_type {
                     Type::Array(_) | Type::String => {
                         if arr_type.as_ref() != &Type::Int {

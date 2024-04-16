@@ -150,12 +150,17 @@ lazy_static! {
         heap_arity: 1,
         return_is_heap: false,
         function: |vm, _args, heap_args| {
-            Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { b: arr.into_iter().all(|x| x.b) });
-                },
+            match &heap_args[0] {
+                // HeapValue::Array(arr) => unsafe {
+                //     vm.stack.push(Value { b: arr.into_iter().all(|x| x.b) });
+                // },
+                HeapValue::LazyIter(iter) => unsafe {
+                    let v = iter.clone().into_iter().all(|x| x.b);
+                    vm.stack.push(Value::from_bool(v));
+                    Ok(())
+                }
                 _ => unreachable!()
-            })
+            }
         }
     };
     static ref ANY: NativeFunction = NativeFunction {
@@ -164,12 +169,17 @@ lazy_static! {
         heap_arity: 1,
         return_is_heap: false,
         function: |vm, _args, heap_args| {
-            Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { b: arr.into_iter().any(|x| x.b) });
-                },
+            match &heap_args[0] {
+                // HeapValue::Array(arr) => unsafe {
+                //     vm.stack.push(Value { b: arr.into_iter().any(|x| x.b) });
+                // },
+                HeapValue::LazyIter(iter) => unsafe {
+                    let v = iter.clone().into_iter().any(|x| x.b);
+                    vm.stack.push(Value::from_bool(v));
+                    Ok(())
+                }
                 _ => unreachable!()
-            })
+            }
         }
     };
 }
@@ -191,8 +201,8 @@ pub fn builtin_types() -> FxHashMap<String, Type> {
     map.insert("sumf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
     map.insert("prodf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
 
-    map.insert("all".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
-    map.insert("any".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("all".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("any".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
     
     map.insert("E".to_string(), Type::Float);
 
