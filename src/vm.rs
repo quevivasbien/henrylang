@@ -156,28 +156,33 @@ impl VM {
     pub fn call_function(&mut self, closure: Box<Closure>) -> Result<(), InterpreterError> {
         let n_args = closure.function.arity as usize;
         let n_heap_args = closure.function.heap_arity as usize;
+        let is_heap = closure.function.return_is_heap;
         let new_frame = CallFrame::new(closure, self.stack.len() - n_args, self.heap_stack.len() - n_heap_args);
         self.frames.push(new_frame);
-        let result = self.call()?;
-        // clear stack used by function and function args
-        self.stack.truncate(self.stack.len() - n_args);
-        self.heap_stack.truncate(self.heap_stack.len() - n_heap_args);
-        match result {
-            ReturnValue::Value(v) => self.stack.push(v),
-            ReturnValue::HeapValue(v) => self.heap_stack.push(v),
-        };
+        self.call()?;
+        if is_heap {
+            let result = self.heap_stack.pop().expect("Expected a heap return value from function");
+            // clear stack used by function args
+            self.stack.truncate(self.stack.len() - n_args);
+            self.heap_stack.truncate(self.heap_stack.len() - n_heap_args);
+            // push result back onto stack
+            self.heap_stack.push(result);
+        }
+        else {
+            let result = self.stack.pop().expect("Expected a return value from function");
+            // clear stack used by function args
+            self.stack.truncate(self.stack.len() - n_args);
+            self.heap_stack.truncate(self.heap_stack.len() - n_heap_args);
+            // push result back onto stack
+            self.stack.push(result);
+        }
         Ok(())
     }
 
     pub fn call_native_function(&mut self, function: &'static NativeFunction) -> Result<(), InterpreterError> {
         let args = self.stack.split_off(self.stack.len() - function.arity as usize);
         let heap_args = self.heap_stack.split_off(self.heap_stack.len() - function.heap_arity as usize);
-        let result = (function.function)(self, &args, &heap_args)?;
-        match result {
-            ReturnValue::Value(v) => self.stack.push(v),
-            ReturnValue::HeapValue(v) => self.heap_stack.push(v),
-        };
-        Ok(())
+        (function.function)(self, &args, &heap_args)
     }
 
     fn get_idx(&mut self, arr_len: usize) -> Result<i64, InterpreterError> {
@@ -319,7 +324,7 @@ impl VM {
         Ok(())
     }
 
-    fn call(&mut self) -> Result<ReturnValue, InterpreterError> {
+    fn call(&mut self) -> Result<(), InterpreterError> {
         if self.frames.is_empty() {
             panic!("Attempted to call with no active call frame");
         }
@@ -335,6 +340,7 @@ impl VM {
             }
             #[cfg(feature = "debug")]
             {
+                print!("frames: {}, ", self.frames.len());
                 print!("stack: {:?}, ", &self.stack[self.frame().stack_idx..]);
                 print!("heap_stack: {:?}, ", &self.heap_stack[self.frame().heap_stack_idx..]);
                 // print!("globals: {:?}, ", self.globals);
@@ -347,14 +353,8 @@ impl VM {
                 OpCode::Return => {
                     // pop function
                     self.frames.pop();
-                    return Ok(ReturnValue::Value(self.stack.pop().unwrap()));
+                    return Ok(());
                 },
-                OpCode::ReturnHeap => {
-                    // pop function
-                    self.frames.pop();
-                    return Ok(ReturnValue::HeapValue(self.heap_stack.pop().unwrap()));
-                },
-
 
                 OpCode::True => self.stack.push(Value::from_bool(true)),
                 OpCode::False => self.stack.push(Value::from_bool(false)),
@@ -793,12 +793,18 @@ impl VM {
             ;
         let function = Rc::new(function);
         self.init(function);
-        let result = self.call().map_err(|e| {
+        self.call().map_err(|e| {
             // in case of error, clean up before returning
             self.stack.clear();
             self.frames.clear();
             e
         })?;
+        let result = if return_type.is_heap() {
+            ReturnValue::HeapValue(self.heap_stack.pop().unwrap())
+        }
+        else {
+            ReturnValue::Value(self.stack.pop().unwrap())
+        };
         unpack_result(result, &return_type).map_err(|e| InterpreterError::RuntimeError(e))
     }
 }

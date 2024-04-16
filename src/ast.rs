@@ -152,14 +152,7 @@ impl Expression for ASTTopLevel {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         self.child.compile(compiler)?;
-        compiler.write_opcode(
-            if self.get_type()?.is_heap() {
-                OpCode::ReturnHeap
-            }
-            else {
-                OpCode::Return
-            }
-        );
+        compiler.write_opcode(OpCode::Return);
         Ok(())
     }
 }
@@ -414,14 +407,7 @@ impl Expression for Function {
         }
 
         self.block.compile(&mut inner_compiler)?;
-        inner_compiler.write_opcode(
-            if rtype.is_heap() {
-                OpCode::ReturnHeap
-            }
-            else {
-                OpCode::Return
-            }
-        );
+        inner_compiler.write_opcode(OpCode::Return);
 
         compiler.write_function(inner_compiler)
     }

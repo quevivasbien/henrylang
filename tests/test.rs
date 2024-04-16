@@ -70,16 +70,16 @@ fn test_euler() {
 #[test]
 fn test_primes() {
     let source = "
-    is_prime := |n| {
+    is_prime := |n: Int| {
         if n = 2 { true }
         else {
-            sqrt_n := int(pow(float(n), 0.5)) + 1
-            all(|p| { mod(n, p) != 0 } -> 2 to sqrt_n)
+            sqrt_n := ftoi(powf(itof(n), 0.5)) + 1
+            all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
         }
     }
     
     primes := filter(is_prime, 2 to 100)
-    sum(primes)
+    sumi(primes)
     ";
 
     let result = run_expect_value!(source, Int);

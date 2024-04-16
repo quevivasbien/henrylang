@@ -68,7 +68,7 @@ pub struct NativeFunction {
     pub arity: u8,
     pub heap_arity: u8,
     pub return_is_heap: bool,
-    pub function: fn(&mut VM, &[Value], &[HeapValue]) -> Result<ReturnValue, InterpreterError>,
+    pub function: fn(&mut VM, &[Value], &[HeapValue]) -> Result<(), InterpreterError>,
 }
 
 impl Debug for NativeFunction {
@@ -137,21 +137,6 @@ impl Debug for Object {
     }
 }
 
-// impl Display for Object {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         if self.typedef.name.is_empty() {
-//             write!(f, "{{")?;
-//         }
-//         else {
-//             write!(f, "{} {{", self.typedef.name)?;
-//         }
-//         for field in &self.typedef.fieldnames {
-//             write!(f, " {}: {}", field, self.fields.get(field).unwrap())?;
-//         }
-//         write!(f, " }}")
-//     }
-// }
-
 impl Object {
     pub fn new(typedef: Rc<TypeDef>, fields: HashMap<String, Value>, heap_fields: HashMap<String, HeapValue>) -> Self {
         Self { typedef, fields, heap_fields }
@@ -163,7 +148,6 @@ pub union Value {
     pub i: i64,
     pub f: f64,
     pub b: bool,
-    pub p: *const Rc<[Value]>, // pointer to an value stored in local simulated heap
 }
 
 impl Value {

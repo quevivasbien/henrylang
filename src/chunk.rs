@@ -9,7 +9,6 @@ use crate::values::{Closure, HeapValue, Value};
 #[repr(u8)]
 pub enum OpCode {
     Return,
-    ReturnHeap,
     
     // Constants
     True,

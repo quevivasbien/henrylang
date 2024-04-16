@@ -4,7 +4,7 @@ use std::time::UNIX_EPOCH;
 use lazy_static::lazy_static;
 
 use crate::ast::Type;
-use crate::values::{HeapValue, NativeFunction, ReturnValue, Value};
+use crate::values::{HeapValue, NativeFunction, Value};
 
 lazy_static! {
     static ref PRINT: NativeFunction = NativeFunction {
@@ -12,11 +12,11 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: true,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::String(x) => {
                     println!("{}", x);
-                    ReturnValue::HeapValue(HeapValue::String(x.clone()))
+                    vm.heap_stack.push(HeapValue::String(x.clone()));
                 },
                 _ => unreachable!()
             })
@@ -27,9 +27,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, _args, _heap_args| {
+        function: |vm, _args, _heap_args| {
             let now = UNIX_EPOCH.elapsed().unwrap().as_micros();
-            Ok(ReturnValue::Value(Value { i: now as i64 }))
+            vm.stack.push(Value { i: now as i64 });
+            Ok(())
         }
     };
 
@@ -38,8 +39,9 @@ lazy_static! {
         arity: 1,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, args, _heap_args| {
-            Ok(ReturnValue::Value(unsafe { Value { f: (args[0].i as f64) } }))
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { f: (args[0].i as f64) } });
+            Ok(())
         }
     };
     static ref FTOI: NativeFunction = NativeFunction {
@@ -47,8 +49,9 @@ lazy_static! {
         arity: 1,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, args, _heap_args| {
-            Ok(ReturnValue::Value(unsafe { Value { i: (args[0].f as i64) } }))
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { i: (args[0].f as i64) } });
+            Ok(())
         }
     };
 
@@ -57,8 +60,9 @@ lazy_static! {
         arity: 2,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, args, _heap_args| {
-            Ok(ReturnValue::Value(unsafe { Value { i: (args[0].i.rem_euclid(args[1].i)) } }))
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { i: (args[0].i.rem_euclid(args[1].i)) } });
+            Ok(())
         }
     };
     static ref POWI: NativeFunction = NativeFunction {
@@ -66,8 +70,9 @@ lazy_static! {
         arity: 2,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, args, _heap_args| {
-            Ok(ReturnValue::Value(unsafe { Value { i: (args[0].i.pow(args[1].i as u32)) } }))
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { i: (args[0].i.pow(args[1].i as u32)) } });
+            Ok(())
         }
     };
     static ref POWF: NativeFunction = NativeFunction {
@@ -75,8 +80,9 @@ lazy_static! {
         arity: 2,
         heap_arity: 0,
         return_is_heap: false,
-        function: |_vm, args, _heap_args| {
-            Ok(ReturnValue::Value(unsafe { Value { f: (args[0].f.powf(args[1].f)) } }))
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { f: (args[0].f.powf(args[1].f)) } });
+            Ok(())
         }
     };
 
@@ -85,10 +91,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { i: arr.into_iter().map(|x| x.i).sum() })
+                    vm.stack.push(Value { i: arr.into_iter().map(|x| x.i).sum() });
                 },
                 _ => unreachable!()
             })
@@ -99,10 +105,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { i: arr.into_iter().map(|x| x.i).product() })
+                    vm.stack.push(Value { i: arr.into_iter().map(|x| x.i).product() });
                 },
                 _ => unreachable!()
             })
@@ -114,10 +120,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { f: arr.into_iter().map(|x| x.f).sum() })
+                    vm.stack.push(Value { f: arr.into_iter().map(|x| x.f).sum() });
                 },
                 _ => unreachable!()
             })
@@ -128,10 +134,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { f: arr.into_iter().map(|x| x.f).product() })
+                    vm.stack.push(Value { f: arr.into_iter().map(|x| x.f).product() });
                 },
                 _ => unreachable!()
             })
@@ -143,10 +149,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { b: arr.into_iter().all(|x| x.b) })
+                    vm.stack.push(Value { b: arr.into_iter().all(|x| x.b) });
                 },
                 _ => unreachable!()
             })
@@ -157,10 +163,10 @@ lazy_static! {
         arity: 0,
         heap_arity: 1,
         return_is_heap: false,
-        function: |_vm, _args, heap_args| {
+        function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
                 HeapValue::Array(arr) => unsafe {
-                    ReturnValue::Value(Value { b: arr.into_iter().any(|x| x.b) })
+                    vm.stack.push(Value { b: arr.into_iter().any(|x| x.b) });
                 },
                 _ => unreachable!()
             })
