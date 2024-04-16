@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use lazy_static::lazy_static;
 
@@ -63,8 +63,8 @@ impl ParseRule {
 }
 
 lazy_static! {
-    static ref RULES: HashMap<TokenType, ParseRule> = {
-        let mut map = HashMap::new();
+    static ref RULES: FxHashMap<TokenType, ParseRule> = {
+        let mut map = FxHashMap::default();
         // groupings
         map.insert(
             TokenType::LParen,

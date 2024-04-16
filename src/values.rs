@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt::{Debug, Display};
 use std::rc::Rc;
 
@@ -122,8 +122,8 @@ impl TypeDef {
 
 pub struct Object {
     pub typedef: Rc<TypeDef>,
-    pub fields: HashMap<String, Value>,
-    pub heap_fields: HashMap<String, HeapValue>,
+    pub fields: FxHashMap<String, Value>,
+    pub heap_fields: FxHashMap<String, HeapValue>,
 }
 
 impl Debug for Object {
@@ -138,7 +138,7 @@ impl Debug for Object {
 }
 
 impl Object {
-    pub fn new(typedef: Rc<TypeDef>, fields: HashMap<String, Value>, heap_fields: HashMap<String, HeapValue>) -> Self {
+    pub fn new(typedef: Rc<TypeDef>, fields: FxHashMap<String, Value>, heap_fields: FxHashMap<String, HeapValue>) -> Self {
         Self { typedef, fields, heap_fields }
     }
 }
@@ -222,7 +222,7 @@ pub enum TaggedValue {
     Maybe(Option<Box<TaggedValue>>),
     Closure(Box<Closure>),
     TypeDef(Rc<TypeDef>),
-    Object(String, HashMap<String, TaggedValue>),
+    Object(String, FxHashMap<String, TaggedValue>),
 }
 
 impl Display for TaggedValue {

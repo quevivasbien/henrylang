@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::time::UNIX_EPOCH;
 
 use lazy_static::lazy_static;
@@ -174,8 +174,8 @@ lazy_static! {
     };
 }
 
-pub fn builtin_types() -> HashMap<String, Type> {
-    let mut map = HashMap::new();
+pub fn builtin_types() -> FxHashMap<String, Type> {
+    let mut map = FxHashMap::default();
     map.insert("print".to_string(), Type::Function(vec![Type::String], Box::new(Type::String)));
     map.insert("time".to_string(), Type::Function(vec![], Box::new(Type::Int)));
     map.insert("itof".to_string(), Type::Function(vec![Type::Int], Box::new(Type::Float)));
@@ -199,15 +199,15 @@ pub fn builtin_types() -> HashMap<String, Type> {
     map
 }
 
-pub fn builtins() -> HashMap<String, Value> {
-    let mut map = HashMap::new();
+pub fn builtins() -> FxHashMap<String, Value> {
+    let mut map = FxHashMap::default();
     map.insert("E".to_string(), Value { f: std::f64::consts::E });
 
     map
 }
 
-pub fn heap_builtins() -> HashMap<String, HeapValue> {
-    let mut map = HashMap::new();
+pub fn heap_builtins() -> FxHashMap<String, HeapValue> {
+    let mut map = FxHashMap::default();
     map.insert("print".to_string(), HeapValue::NativeFunction(&PRINT));
     map.insert("time".to_string(), HeapValue::NativeFunction(&TIME));
     map.insert("itof".to_string(), HeapValue::NativeFunction(&ITOF));

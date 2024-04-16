@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 use crate::{ast, parser};
@@ -70,7 +70,7 @@ pub struct Upvalue {
     pub is_local: bool,
 }
 
-pub type TypeContext = Rc<RefCell<HashMap<String, ast::Type>>>;
+pub type TypeContext = Rc<RefCell<FxHashMap<String, ast::Type>>>;
 
 pub struct Compiler {
     pub function: Function,

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::ops::{Add, Mul, Sub, Div, Neg};
 use std::rc::Rc;
 
@@ -40,8 +40,8 @@ impl CallFrame {
 pub struct VM {
     pub stack: Vec<Value>,
     pub heap_stack: Vec<HeapValue>,
-    pub globals: HashMap<String, Value>,
-    pub heap_globals: HashMap<String, HeapValue>,
+    pub globals: FxHashMap<String, Value>,
+    pub heap_globals: FxHashMap<String, HeapValue>,
     pub frames: Vec<CallFrame>,
     pub typecontext: compiler::TypeContext,
 }
@@ -212,8 +212,8 @@ impl VM {
     }
 
     pub fn create_object(&mut self, typedef: Rc<TypeDef>) -> Result<(), InterpreterError> {
-        let mut fields = HashMap::new();
-        let mut heap_fields = HashMap::new();
+        let mut fields = FxHashMap::default();
+        let mut heap_fields = FxHashMap::default();
         for (fieldname, is_heap) in typedef.fields.iter().cloned().rev() {
             if is_heap {
                 let value = self.heap_stack.pop().expect("Call to create_object resulted in empty stack");
@@ -875,7 +875,7 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
             }).map(|(_, v)| {
                 v.clone()
             });
-            let mut fields = HashMap::new();
+            let mut fields = FxHashMap::default();
             for ((n, v), t) in obj.fields.iter().zip(nonheap_fields) {
                 let x = TaggedValue::from_value(*v, &t)?;
                 fields.insert(n.clone(), x);

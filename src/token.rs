@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use enum_iterator::Sequence;
 use lazy_static::lazy_static;
 
@@ -57,8 +57,8 @@ pub enum TokenType {
 }
 
 lazy_static! {
-    static ref SINGLE_CHAR_TOKENS: HashMap<char, TokenType> = {
-        let mut map = HashMap::new();
+    static ref SINGLE_CHAR_TOKENS: FxHashMap<char, TokenType> = {
+        let mut map = FxHashMap::default();
         map.insert('(', TokenType::LParen);
         map.insert(')', TokenType::RParen);
         map.insert('{', TokenType::LBrace);
@@ -76,8 +76,8 @@ lazy_static! {
         map
     };
 
-    static ref KEYWORDS: HashMap<&'static str, TokenType> = {
-        let mut map = HashMap::new();
+    static ref KEYWORDS: FxHashMap<&'static str, TokenType> = {
+        let mut map = FxHashMap::default();
         map.insert("and", TokenType::And);
         map.insert("or", TokenType::Or);
         map.insert("type", TokenType::Type);
