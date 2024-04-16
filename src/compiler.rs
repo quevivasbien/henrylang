@@ -120,7 +120,7 @@ impl Compiler {
     pub fn write_array(&mut self, len: u16) -> Result<(), String> {
         self.chunk().write_array(len, 0).map_err(|e| e.to_string())
     }
-    pub fn write_array_array(&mut self, len: u16) -> Result<(), String> {
+    pub fn write_array_heap(&mut self, len: u16) -> Result<(), String> {
         self.chunk().write_array_array(len, 0).map_err(|e| e.to_string())
     }
     pub fn write_jump(&mut self, opcode: OpCode) -> Result<usize, String> {

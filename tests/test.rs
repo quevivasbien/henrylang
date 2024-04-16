@@ -105,6 +105,16 @@ fn test_closure() {
 
     let result = run_expect_value!(source, Int);
     assert_eq!(result, 14);
+
+    let source = "
+    f := |x: Int| { x + 1 }
+    g := |s: String, f: Function(Int, Int)| { f(len(s)) }
+
+    g(\"hello\", f)
+    ";
+
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 6);
 }
 
 #[test]
@@ -123,6 +133,40 @@ fn test_object() {
 
     let result = run_expect_value!(source, Bool);
     assert!(result);
+
+    let source = "
+    T := type {
+        a: Int
+        b: Array(String),
+    }
+    
+    U := type {
+        a: Bool,
+        b: T
+    }
+    
+    f := |x: U| {
+        x.b.b(0) + \" \" + x.b.b(1)
+    }
+    
+    u := U(true, T(1, [\"hello\", \"there\"]))
+    f(u)
+    ";
+
+    let result = run_expect_value!(source, String);
+    assert_eq!(result, "hello there");
+
+    let source = "
+    T := type {
+        a: Int
+        b: Array(String),
+    }
+    
+    x := []: Maybe(T) + [some(T(1, []:String)), {}: T]
+    x
+    ";
+
+    run_expect_value!(source, Array);
 }
 
 #[test]

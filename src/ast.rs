@@ -23,16 +23,6 @@ pub enum Type {
 }
 
 impl Type {
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "Int" => Ok(Self::Int),
-            "Float" => Ok(Self::Float),
-            "String" => Ok(Self::String),
-            "Bool" => Ok(Self::Bool),
-            // Cannot resolve compound types with this method
-            _ => Err(format!("Unknown type {}", s)),
-        }
-    }
     pub fn is_heap(&self) -> bool {
         matches!(self, Self::String | Self::Array(_) | Self::Maybe(_) | Self::Function(_, _) | Self::Object(_, _))
     }
@@ -47,6 +37,27 @@ pub struct VarType {
 impl VarType {
     pub fn new(name: String, typ: Type) -> Self {
         Self { name, typ }
+    }
+}
+
+fn resolve_type(name: &String, origin: *const dyn Expression) -> Result<Type, String> {
+    // climb up the tree looking for a VarType with a matching name
+    let mut e = origin;
+    loop {
+        let last_e = e;
+        if let Some(parent) = unsafe { (*e).get_parent() } {
+            e = parent;
+        }
+        else {
+            // reached top of tree
+            return Err(format!(
+                "Could not find definition for variable {}", name
+            ));
+        }
+        let typ = unsafe { (*e).find_vartype(&name, last_e) };
+        if let Some(typ) = typ? {
+            return Ok(typ);
+        }
     }
 }
 
@@ -157,17 +168,44 @@ impl Expression for ASTTopLevel {
 pub struct TypeAnnotation {
     typename: String,
     children: Vec<TypeAnnotation>,
+    parent: Option<*const dyn Expression>,
 }
 
 impl TypeAnnotation {
     pub fn new(typename: String, children: Vec<TypeAnnotation>) -> Self {
-        Self { typename, children }
+        Self { typename, children, parent: None }
     }
 
+    fn resolve_typedef(&self) -> Result<Type, String> {
+        let parent = match self.parent {
+            Some(x) => x,
+            None => return Err(format!("Could not resolve type for {}; parent is None", self.typename)),
+        };
+        let typ = resolve_type(&self.typename, parent)?;
+        let objtype = match typ {
+            Type::Function(_, t) => *t,
+            _ => return Err(format!("When resolving type, expected an Object definition, but got {:?}", typ)),
+        };
+        if let Type::Object(n, _) = &objtype {
+            debug_assert_eq!(n, &self.typename);
+            Ok(objtype)
+        }
+        else {
+            Err(format!("When resolving type, expected an Object definition, but got {:?}", objtype))
+        }
+    }
+}
+
+impl Expression for TypeAnnotation {
     fn get_type(&self) -> Result<Type, String> {
-        // TODO: Get this to work properly for user-defined types
         if self.children.is_empty() {
-            return Type::from_str(self.typename.as_str())
+            return match self.typename.as_str() {
+                "Int" => Ok(Type::Int),
+                "Float" => Ok(Type::Float),
+                "String" => Ok(Type::String),
+                "Bool" => Ok(Type::Bool),
+                _ => self.resolve_typedef(),
+            }
         }
         let child_types = self.children.iter().map(|a| a.get_type()).collect::<Result<Vec<Type>, String>>()?;
         match self.typename.as_str() {
@@ -202,6 +240,21 @@ impl TypeAnnotation {
             },
             _ => unimplemented!("Unknown type annotation: {}", self.typename)
         }
+    }
+    
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        for c in self.children.iter_mut() {
+            c.set_parent(Some(self_ptr))
+        }
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -314,6 +367,12 @@ impl Expression for Function {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         self.block.set_parent(Some(self_ptr));
+        if let Some(rtype) = &mut self.rtype {
+            rtype.set_parent(Some(self_ptr));
+        }
+        for param in self.params.iter_mut() {
+            param.typ.set_parent(Some(self_ptr));
+        }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
@@ -719,24 +778,7 @@ impl Variable {
 
 impl Expression for Variable {
     fn get_type(&self) -> Result<Type, String> {
-        // climb up the tree looking for a VarType with a matching name
-        let mut e: *const dyn Expression = self;
-        loop {
-            let last_e = e;
-            if let Some(parent) = unsafe { (*e).get_parent() } {
-                e = parent;
-            }
-            else {
-                // reached top of tree
-                return Err(format!(
-                    "Could not find definition for variable {}", self.name
-                ));
-            }
-            let typ = unsafe { (*e).find_vartype(&self.name, last_e) };
-            if let Some(typ) = typ? {
-                return Ok(typ);
-            }
-        }
+        resolve_type(&self.name, self)
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -896,7 +938,7 @@ impl Expression for IfStatement {
 
 #[derive(Debug)]
 enum ArrayElems {
-    Empty(Type),
+    Empty(TypeAnnotation),
     Elements(Vec<Box<dyn Expression>>),
 }
 
@@ -911,7 +953,6 @@ impl Array {
         Self { elements: ArrayElems::Elements(elements), parent: None }
     }
     pub fn new_empty(typ: TypeAnnotation) -> Result<Self, String> {
-        let typ = typ.get_type()?;
         Ok(Self { elements: ArrayElems::Empty(typ), parent: None })
     }
 }
@@ -919,7 +960,7 @@ impl Array {
 impl Expression for Array {
     fn get_type(&self) -> Result<Type, String> {
         match &self.elements {
-            ArrayElems::Empty(t) => Ok(Type::Array(Box::new(t.clone()))),
+            ArrayElems::Empty(t) => Ok(Type::Array(Box::new(t.get_type()?))),
             ArrayElems::Elements(elems) => {
                 let first_type = elems[0].get_type()?;
                 for elem in elems.iter() {
@@ -937,10 +978,15 @@ impl Expression for Array {
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        if let ArrayElems::Elements(elems) = &mut self.elements {
-            for elem in elems.iter_mut() {
-                elem.set_parent(Some(self_ptr))
+        match &mut self.elements {
+            ArrayElems::Elements(elems) => {
+                for elem in elems.iter_mut() {
+                    elem.set_parent(Some(self_ptr))
+                }
             }
+            ArrayElems::Empty(t) => {
+                t.set_parent(Some(self_ptr))
+            },
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -961,11 +1007,11 @@ impl Expression for Array {
             Type::Array(t) => t,
             _ => unreachable!()
         };
-        match typ.as_ref() {
-            Type::Array(_) | Type::String => {
-                compiler.write_array_array(len)
-            },
-            _ => compiler.write_array(len),
+        if typ.is_heap() {
+            compiler.write_array_heap(len)
+        }
+        else {
+            compiler.write_array(len)
         }
     }
 }
@@ -1002,6 +1048,10 @@ impl Expression for TypeDef {
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        for field in self.fields.iter_mut() {
+            field.typ.set_parent(Some(self_ptr))
+        }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
@@ -1109,8 +1159,9 @@ impl Expression for Maybe {
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        if let MaybeValue::Some(value) = &mut self.value {
-            value.set_parent(Some(self_ptr))
+        match &mut self.value {
+            MaybeValue::Some(value) => value.set_parent(Some(self_ptr)),
+            MaybeValue::Null(t) => t.set_parent(Some(self_ptr)),
         }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -1156,7 +1207,6 @@ impl Unwrap {
 
 impl Expression for Unwrap {
     fn get_type(&self) -> Result<Type, String> {
-        // TODO: Type inference hangs when resolving variable within unwrap        return Ok(Type::Int)
         let inner_type = match self.value.get_type()? {
             Type::Maybe(t) => *t,
             x => return Err(format!("Unwrap expected Maybe, got {:?}", x))

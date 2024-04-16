@@ -853,7 +853,6 @@ impl Parser {
         let block = self.block();
         let mut top_level = Box::new(ast::ASTTopLevel::new(typecontext, block));
         top_level.set_parent(None);
-        println!("top_level: {:?}", top_level);
         top_level
     }
 }
