@@ -1,4 +1,4 @@
-use crate::{TokenType, Token};
+use crate::token::{TokenType, Token};
 
 struct Scanner {
     source: Vec<char>,

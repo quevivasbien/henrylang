@@ -46,6 +46,11 @@ pub enum TokenType {
     False,
     To,
     Some,
+    Reduce,
+    Filter,
+    Len,
+    ZipMap,
+    Unwrap,
 
     Error,
     EoF,
@@ -82,6 +87,11 @@ lazy_static! {
         map.insert("false", TokenType::False);
         map.insert("to", TokenType::To);
         map.insert("some", TokenType::Some);
+        map.insert("reduce", TokenType::Reduce);
+        map.insert("filter", TokenType::Filter);
+        map.insert("len", TokenType::Len);
+        map.insert("zipmap", TokenType::ZipMap);
+        map.insert("unwrap", TokenType::Unwrap);
 
         map
     };
@@ -100,7 +110,7 @@ impl TokenType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
     pub ttype: TokenType,
     pub line: usize,
