@@ -93,8 +93,8 @@ lazy_static! {
         return_is_heap: false,
         function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { i: arr.into_iter().map(|x| x.i).sum() });
+                HeapValue::LazyIter(iter) => unsafe {
+                    vm.stack.push(Value { i: iter.clone().into_iter().map(|x| x.i).sum() });
                 },
                 _ => unreachable!()
             })
@@ -107,8 +107,8 @@ lazy_static! {
         return_is_heap: false,
         function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { i: arr.into_iter().map(|x| x.i).product() });
+                HeapValue::LazyIter(iter) => unsafe {
+                    vm.stack.push(Value { i: iter.clone().into_iter().map(|x| x.i).product() });
                 },
                 _ => unreachable!()
             })
@@ -122,8 +122,8 @@ lazy_static! {
         return_is_heap: false,
         function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { f: arr.into_iter().map(|x| x.f).sum() });
+                HeapValue::LazyIter(iter) => unsafe {
+                    vm.stack.push(Value { f: iter.clone().into_iter().map(|x| x.f).sum() });
                 },
                 _ => unreachable!()
             })
@@ -136,8 +136,8 @@ lazy_static! {
         return_is_heap: false,
         function: |vm, _args, heap_args| {
             Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { f: arr.into_iter().map(|x| x.f).product() });
+                HeapValue::LazyIter(iter) => unsafe {
+                    vm.stack.push(Value { f: iter.clone().into_iter().map(|x| x.f).product() });
                 },
                 _ => unreachable!()
             })
@@ -150,12 +150,14 @@ lazy_static! {
         heap_arity: 1,
         return_is_heap: false,
         function: |vm, _args, heap_args| {
-            Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { b: arr.into_iter().all(|x| x.b) });
-                },
+            match &heap_args[0] {
+                HeapValue::LazyIter(iter) => unsafe {
+                    let v = iter.clone().into_iter().all(|x| x.b);
+                    vm.stack.push(Value::from_bool(v));
+                    Ok(())
+                }
                 _ => unreachable!()
-            })
+            }
         }
     };
     static ref ANY: NativeFunction = NativeFunction {
@@ -164,12 +166,17 @@ lazy_static! {
         heap_arity: 1,
         return_is_heap: false,
         function: |vm, _args, heap_args| {
-            Ok(match &heap_args[0] {
-                HeapValue::Array(arr) => unsafe {
-                    vm.stack.push(Value { b: arr.into_iter().any(|x| x.b) });
-                },
+            match &heap_args[0] {
+                // HeapValue::Array(arr) => unsafe {
+                //     vm.stack.push(Value { b: arr.into_iter().any(|x| x.b) });
+                // },
+                HeapValue::LazyIter(iter) => unsafe {
+                    let v = iter.clone().into_iter().any(|x| x.b);
+                    vm.stack.push(Value::from_bool(v));
+                    Ok(())
+                }
                 _ => unreachable!()
-            })
+            }
         }
     };
 }
@@ -185,14 +192,14 @@ pub fn builtin_types() -> FxHashMap<String, Type> {
     map.insert("powi".to_string(), Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     map.insert("powf".to_string(), Type::Function(vec![Type::Float, Type::Float], Box::new(Type::Float)));
 
-    map.insert("sumi".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Int))], Box::new(Type::Int)));
-    map.insert("prodi".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("sumi".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("prodi".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Int))], Box::new(Type::Int)));
 
-    map.insert("sumf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
-    map.insert("prodf".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("sumf".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("prodf".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Float))], Box::new(Type::Float)));
 
-    map.insert("all".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
-    map.insert("any".to_string(), Type::Function(vec![Type::Array(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("all".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("any".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
     
     map.insert("E".to_string(), Type::Float);
 

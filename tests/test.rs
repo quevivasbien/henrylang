@@ -189,7 +189,7 @@ fn test_maybe() {
 #[test]
 fn test_reduce() {
     let source = "
-    sum := |arr: Array(Int)| {
+    sum := |arr: Iterator(Int)| {
         reduce(|acc: Int, x: Int| {acc + x}, arr, 0)
     }
     
@@ -200,7 +200,7 @@ fn test_reduce() {
     assert!(result);
 
     let source = "
-    my_all := |arr: Array(Bool)| {
+    my_all := |arr: Iterator(Bool)| {
         reduce(|acc: Bool, x: Bool|{acc and x}, arr, true)
     }
     
@@ -211,14 +211,19 @@ fn test_reduce() {
     my_all(some_false) = all(some_false) ? = false
     ";
     let result = run_expect_value!(source, Bool);
-    assert!(result);    
+    assert!(result);
+
+    let source = "reduce(|acc: String, x: String|{acc+x}, |x:String|{x} -> [\"henry\", \"lenry\", \"!\"], \"\")";
+    let result = run_expect_value!(source, String);
+    assert_eq!(result, "henrylenry!");
 }
 
 #[test]
 fn test_zipmap() {
     let source = "
-    haslen := |arr: Array(Int), l: Int| { len(arr) = l }
-    all(zipmap(haslen, [0 to 3, 0 to 4, -4 to 4], [4, 5, 9]))
+    haslen := |s: String, l: Int| { len(s) = l }
+    zipped := zipmap(haslen, [\"henry\", \"lenry\", \"frenry\"], 5 to 10)
+    any(zipped)
     ";
     let result = run_expect_value!(source, Bool);
     assert!(result);
@@ -226,14 +231,14 @@ fn test_zipmap() {
     let source = "
     x1 := |x:Int|{mod(x, 2)} -> 0 to 4
     x2 := zipmap(mod, 0 to 4, [2, 2, 2, 2, 2])
-    x1 = x2
+    @x1 = @x2
     ";
     let result = run_expect_value!(source, Bool);
     assert!(result);
 
     let source = "
     MyType := type { name: String, number: Int }
-    mytypes := zipmap(MyType, [\"henry\", \"lenry\"], [1, 2])
+    mytypes := @zipmap(MyType, [\"henry\", \"lenry\"], [1, 2])
 
     mytypes(0).name = \"henry\" and mytypes(1).number = 2 
     ";

@@ -8,12 +8,13 @@
 - Everything is an expression.
 - Functions are first-class.
 - Types are resolved at compile time.
+- Lazy iterators
 
 ## Planned / in-progress
 
 - Function polymorphism with static dispatch
 - ND Arrays
-- Lazy iterators
+- Multithreading
 
 ## Usage examples
 

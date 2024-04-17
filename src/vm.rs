@@ -7,9 +7,9 @@ use crate::ast;
 use crate::builtins;
 use crate::chunk::{Chunk, OpCode};
 use crate::compiler;
-use crate::values::{Closure, Function, HeapValue, NativeFunction, Object, ReturnValue, TaggedValue, TypeDef, Value};
+use crate::values::{ArrayIter, Closure, FilterIter, Function, HeapValue, IndexIter, LazyIter, MapIter, MapIterHeap, MapIterNative, MapIterNativeHeap, NativeFunction, Object, RangeIter, ReturnValue, ReverseRangeIter, TaggedValue, TypeDef, Value, ZipIter, ZipIterNative, ZipIterTypeDef};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InterpreterError {
     CompileError(String),
     RuntimeError(String),
@@ -251,12 +251,20 @@ impl VM {
 
     fn push_map_result(&mut self, len: usize, is_heap: bool) {
         if is_heap {
-            let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - len));
-            self.heap_stack.push(HeapValue::ArrayHeap(arr));
+            let lazy_iter = Box::new(
+                ArrayIter::new(Rc::from(
+                    self.heap_stack.split_off(self.heap_stack.len() - len)
+                ))
+            );
+            self.heap_stack.push(HeapValue::LazyIterHeap(lazy_iter));
         }
         else {
-            let arr = Rc::from(self.stack.split_off(self.stack.len() - len));
-            self.heap_stack.push(HeapValue::Array(arr));
+            let lazy_iter = Box::new(
+                ArrayIter::new(Rc::from(
+                    self.stack.split_off(self.stack.len() - len)
+                ))
+            );
+            self.heap_stack.push(HeapValue::LazyIter(lazy_iter));
         }
     }
 
@@ -265,6 +273,29 @@ impl VM {
         let callee = self.heap_stack.pop().expect("Expected callable on heap stack");
 
         match (callee, arg) {
+            // Closure -> LazyIter
+            (HeapValue::Closure(f), HeapValue::LazyIter(iter)) => {
+                if f.function.return_is_heap {
+                    let map_iter = Box::new(MapIterHeap::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+                }
+                else {
+                    let map_iter = Box::new(MapIter::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIter(map_iter));
+                }
+            },
+            // Closure -> LazyIterHeap
+            (HeapValue::Closure(f), HeapValue::LazyIterHeap(iter)) => {
+                if f.function.return_is_heap {
+                    let map_iter = Box::new(MapIterHeap::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+                }
+                else {
+                    let map_iter = Box::new(MapIter::new(iter, f, self));
+                    self.heap_stack.push(HeapValue::LazyIter(map_iter));
+                }
+            },
+            // Closure -> Array
             (HeapValue::Closure(f), HeapValue::Array(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -273,6 +304,7 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.function.return_is_heap);
             },
+            // Closure -> ArrayHeap
             (HeapValue::Closure(f), HeapValue::ArrayHeap(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -281,6 +313,17 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.function.return_is_heap);
             },
+            // NativeFunction -> LazyIter
+            (HeapValue::NativeFunction(f), HeapValue::LazyIter(iter)) => {
+                let map_iter = Box::new(MapIterNative::new(iter, f, self));
+                self.heap_stack.push(HeapValue::LazyIter(map_iter));
+            },
+            // NativeFunction -> LazyIterHeap
+            (HeapValue::NativeFunction(f), HeapValue::LazyIterHeap(iter)) => {
+                let map_iter = Box::new(MapIterNativeHeap::new(iter, f, self));
+                self.heap_stack.push(HeapValue::LazyIterHeap(map_iter));
+            },
+            // NativeFunction -> Array
             (HeapValue::NativeFunction(f), HeapValue::Array(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -289,6 +332,7 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.return_is_heap);
             },
+            // NativeFunction -> ArrayHeap
             (HeapValue::NativeFunction(f), HeapValue::ArrayHeap(a)) => {
                 let n_calls = a.len();
                 for a in a.iter(){
@@ -297,27 +341,37 @@ impl VM {
                 }
                 self.push_map_result(n_calls, f.return_is_heap);
             },
+            // Array -> LazyIter of indices
+            (HeapValue::Array(a), HeapValue::LazyIter(iter)) => {
+                let index_iter = Box::new(IndexIter::new(
+                    iter, a
+                ));
+                self.heap_stack.push(HeapValue::LazyIter(index_iter));
+            },
+            // ArrayHeap -> LazyIter of indices
+            (HeapValue::ArrayHeap(a), HeapValue::LazyIter(iter)) => {
+                let index_iter = Box::new(IndexIter::new(
+                    iter, a
+                ));
+                self.heap_stack.push(HeapValue::LazyIterHeap(index_iter));
+            },
+            // Array -> Array of indices
             (HeapValue::Array(a), HeapValue::Array(idxs)) => {
                 let arr = Rc::from(idxs.into_iter().map(|x| {
                     let idx = unsafe { x.i };
                     a[idx as usize]
                 }).collect::<Vec<_>>());
-                self.heap_stack.push(HeapValue::Array(arr));
+                let iter = Box::new(ArrayIter::new(arr));
+                self.heap_stack.push(HeapValue::LazyIter(iter));
             },
+            // ArrayHeap -> Array of indices
             (HeapValue::ArrayHeap(a), HeapValue::Array(idxs)) => {
                 let arr = Rc::from(idxs.into_iter().map(|x| {
                     let idx = unsafe { x.i };
                     a[idx as usize].clone()
                 }).collect::<Vec<_>>());
-                self.heap_stack.push(HeapValue::ArrayHeap(arr));
-            },
-            (HeapValue::String(s), HeapValue::Array(idxs)) => {
-                let s = s.chars().collect::<Vec<_>>();
-                let arr = Rc::from(idxs.into_iter().map(|x| {
-                    let idx = unsafe { x.i };
-                    HeapValue::String(Rc::new(format!("{}", s[idx as usize])))
-                }).collect::<Vec<_>>());
-                self.heap_stack.push(HeapValue::ArrayHeap(arr));
+                let iter = Box::new(ArrayIter::new(arr));
+                self.heap_stack.push(HeapValue::LazyIterHeap(iter));
             },
             _ => unreachable!(),
         }
@@ -330,11 +384,12 @@ impl VM {
         }
         #[cfg(feature = "debug")]
         {
-            // println!("==call {:?}==", self.frame().closure);
+            println!("==call {:?}==", self.frame().closure);
             self.chunk().disassemble();
             println!("");
         }
         loop {
+            #[cfg(feature = "debug")]
             if self.frame().ip >= self.chunk().len() {
                 panic!("Reached end of chunk with no return");
             }
@@ -392,13 +447,13 @@ impl VM {
                     let (r, l) = unsafe {
                         (r.i, l.i)
                     };
-                    let arr: Vec<_> = if r >= l {
-                        (l..=r).map(|i| Value { i }).collect()
+                    let lazy_iter: Box<dyn LazyIter<Value>> = if r >= l {
+                        Box::new(RangeIter::new(l, r))
                     }
                     else {
-                        (r..=l).rev().map(|i| Value { i }).collect()
+                        Box::new(ReverseRangeIter::new(l, r))
                     };
-                    self.heap_stack.push(HeapValue::Array(Rc::from(arr)));
+                    self.heap_stack.push(HeapValue::LazyIter(lazy_iter));
                 }
 
                 // Float ops
@@ -506,6 +561,19 @@ impl VM {
                     let arr = Rc::from(self.heap_stack.split_off(self.heap_stack.len() - n_elems as usize));
                     self.heap_stack.push(HeapValue::ArrayHeap(arr));
                 },
+
+                OpCode::Collect => {
+                    let mut iter = self.heap_stack.pop().expect("Attempted to collect with empty stack");
+                    match &mut iter {
+                        HeapValue::LazyIter(iter) => {
+                            self.heap_stack.push(HeapValue::Array(iter.into_array()));
+                        },
+                        HeapValue::LazyIterHeap(iter) => {
+                            self.heap_stack.push(HeapValue::ArrayHeap(iter.into_array()));
+                        },
+                        _ => unreachable!(),
+                    }
+                }
                 
                 OpCode::SetGlobal => {
                     let name = self.read_heap_constant();
@@ -662,43 +730,61 @@ impl VM {
                 OpCode::Map => self.map()?,
 
                 OpCode::Reduce => {
-                    let init = self.stack.pop().expect("Expected initial value on stack");
-                    let arr = self.heap_stack.pop().expect("Expected array on heap stack");
                     let f = self.heap_stack.pop().expect("Expected function on heap stack");
+                    let arr = self.heap_stack.pop().expect("Expected array on heap stack");
 
                     match (f, arr) {
+                        // reduce(closure, iter, init)
+                        (HeapValue::Closure(f), HeapValue::LazyIter(iter)) => {
+                            for x in iter.into_iter() {
+                                self.stack.push(x);
+                                self.call_function(f.clone())?;
+                            }
+                        },
+                        // reduce(fnative, iter, init)
+                        (HeapValue::NativeFunction(f), HeapValue::LazyIter(iter)) => {
+                            for x in iter.into_iter() {
+                                self.stack.push(x);
+                                self.call_native_function(f)?;
+                            }
+                        },
+                        // reduce(closure, iterheap, init)
+                        (HeapValue::Closure(f), HeapValue::LazyIterHeap(iter)) => {
+                            for x in iter.into_iter() {
+                                self.heap_stack.push(x);
+                                self.call_function(f.clone())?;
+                            }
+                        },
+                        // reduce(fnative, iterheap, init)
+                        (HeapValue::NativeFunction(f), HeapValue::LazyIterHeap(iter)) => {
+                            for x in iter.into_iter() {
+                                self.heap_stack.push(x);
+                                self.call_native_function(f)?;
+                            }
+                        },
+                        // reduce(closure, array, init)
                         (HeapValue::Closure(f), HeapValue::Array(a)) => {
-                            self.stack.push(init);
                             for x in a.iter() {
                                 self.stack.push(*x);
                                 self.call_function(f.clone())?;
                             }
                         },
+                        // reduce(fnative, array, init)
                         (HeapValue::NativeFunction(f), HeapValue::Array(a)) => {
-                            self.stack.push(init);
                             for x in a.iter() {
                                 self.stack.push(*x);
                                 self.call_native_function(f)?;
                             }
                         },
-                        _ => unreachable!(),
-                    }
-                },
-                OpCode::HeapReduce => {
-                    let init = self.heap_stack.pop().expect("Expected initial value on heap stack");
-                    let arr = self.heap_stack.pop().expect("Expected array on heap stack");
-                    let f = self.heap_stack.pop().expect("Expected function on heap stack");
-
-                    match (f, arr) {
+                        // reduce(closure, arrayheap, init)
                         (HeapValue::Closure(f), HeapValue::ArrayHeap(a)) => {
-                            self.heap_stack.push(init);
                             for x in a.iter() {
                                 self.heap_stack.push(x.clone());
                                 self.call_function(f.clone())?;
                             }
                         },
+                        // reduce(fnative, arrayheap, init)
                         (HeapValue::NativeFunction(f), HeapValue::ArrayHeap(a)) => {
-                            self.heap_stack.push(init);
                             for x in a.iter() {
                                 self.heap_stack.push(x.clone());
                                 self.call_native_function(f)?;
@@ -711,24 +797,34 @@ impl VM {
                 OpCode::Filter => {
                     let arr = self.heap_stack.last().expect("Expected array on top of stack").clone();
                     self.map()?;
-                    let bool_arr = match self.heap_stack.pop().expect("Expected bool array on stack after mapping through filter function") {
-                        HeapValue::Array(a) => a,
+                    let bool_iter = match self.heap_stack.pop().expect("Expected bool iterator on stack after mapping through filter function") {
+                        HeapValue::LazyIter(a) => a,
                         _ => unreachable!(),
                     };
                     match arr {
+                        HeapValue::LazyIter(value_iter) => {
+                            let iter = Box::new(FilterIter::new(bool_iter, value_iter));
+                            self.heap_stack.push(HeapValue::LazyIter(iter));
+                        },
+                        HeapValue::LazyIterHeap(value_iter) => {
+                            let iter = Box::new(FilterIter::new(bool_iter, value_iter));
+                            self.heap_stack.push(HeapValue::LazyIterHeap(iter));
+                        },
                         HeapValue::Array(a) => {
-                            let res = a.iter().zip(bool_arr.iter())
-                                .filter(|(_, &b)| unsafe { b.b })
+                            let res = a.iter().zip(bool_iter.into_iter())
+                                .filter(|(_, b)| unsafe { b.b })
                                 .map(|(&x, _)| x)
                                 .collect::<Vec<_>>();
-                            self.heap_stack.push(HeapValue::Array(Rc::from(res)));
+                            let iter = Box::new(ArrayIter::new(Rc::from(res)));
+                            self.heap_stack.push(HeapValue::LazyIter(iter));
                         },
                         HeapValue::ArrayHeap(a) => {
-                            let res = a.iter().zip(bool_arr.iter())
-                                .filter(|(_, &b)| unsafe { b.b })
+                            let res = a.iter().zip(bool_iter.into_iter())
+                                .filter(|(_, b)| unsafe { b.b })
                                 .map(|(x, _)| x.clone())
                                 .collect::<Vec<_>>();
-                            self.heap_stack.push(HeapValue::ArrayHeap(Rc::from(res)));
+                            let iter = Box::new(ArrayIter::new(Rc::from(res)));
+                            self.heap_stack.push(HeapValue::LazyIterHeap(iter));
                         },
                         _ => unreachable!(),
                     }
@@ -736,52 +832,47 @@ impl VM {
 
                 OpCode::ZipMap => {
                     let f = self.heap_stack.pop().expect("Expected function on heap stack");
-                    let n_arrays = unsafe { self.stack.pop().expect("Expected number of arrays on stack").i };
-                    let mut arrays = Vec::new();
-                    let mut heap_arrays = Vec::new();
-                    for _ in 0..n_arrays {
-                        let arr = self.heap_stack.pop().expect("Expected array on heap stack");
-                        match arr {
-                            HeapValue::Array(a) => arrays.push(a),
-                            HeapValue::ArrayHeap(a) => heap_arrays.push(a),
+                    let n_iters = unsafe { self.stack.pop().expect("Expected number of arrays on stack").i };
+                    let mut iters = Vec::new();
+                    let mut heap_iters = Vec::new();
+                    for _ in 0..n_iters {
+                        let hv = self.heap_stack.pop().expect("Expected array on heap stack");
+                        match hv {
+                            HeapValue::LazyIter(i) => iters.push(i),
+                            HeapValue::LazyIterHeap(i) => heap_iters.push(i),
+                            HeapValue::Array(a) => iters.push(Box::new(ArrayIter::new(Rc::from(a)))),
+                            HeapValue::ArrayHeap(a) => heap_iters.push(Box::new(ArrayIter::new(Rc::from(a)))),
                             _ => unreachable!(),
                         }
                     }
-                    let min_len = usize::min(
-                        arrays.iter().map(|a| a.len()).min().unwrap_or(usize::MAX),
-                        heap_arrays.iter().map(|a| a.len()).min().unwrap_or(usize::MAX),
-                    );
-                    for i in 0..min_len {
-                        for arr in arrays.iter().rev() {
-                            self.stack.push(arr[i]);
+                    let zip_iter = match f {
+                        HeapValue::Closure(c) => {
+                            let is_heap = c.function.return_is_heap;
+                            let iter = Box::new(ZipIter::new(iters, heap_iters, c, self));
+                            if is_heap {
+                                HeapValue::LazyIterHeap(iter)
+                            }
+                            else {
+                                HeapValue::LazyIter(iter)
+                            }
+                        },
+                        HeapValue::NativeFunction(f) => {
+                            let iter = Box::new(ZipIterNative::new(iters, heap_iters, f, self));
+                            if f.return_is_heap {
+                                HeapValue::LazyIterHeap(iter)
+                            }
+                            else {
+                                HeapValue::LazyIter(iter)
+                            }
+                        },
+                        HeapValue::TypeDef(td) => {
+                            let iter = Box::new(ZipIterTypeDef::new(iters, heap_iters, td, self));
+                            HeapValue::LazyIterHeap(iter)
                         }
-                        for arr in heap_arrays.iter().rev() {
-                            self.heap_stack.push(arr[i].clone());
-                        }
-                        match &f {
-                            HeapValue::Closure(f) => self.call_function(f.clone())?,
-                            HeapValue::NativeFunction(f) => self.call_native_function(f)?,
-                            HeapValue::TypeDef(td) => self.create_object(td.clone())?,
-                            _ => unreachable!(),
-                        }
-                    }
-                    let is_heap = match &f {
-                        HeapValue::Closure(f) => f.function.return_is_heap,
-                        HeapValue::NativeFunction(f) => f.return_is_heap,
-                        HeapValue::TypeDef(_) => true,
-                        _ => unreachable!(),
+                        _ => unreachable!()
                     };
-                    let result = if is_heap {
-                        HeapValue::ArrayHeap(Rc::from(self.heap_stack.split_off(self.heap_stack.len() - min_len)))
-                    }
-                    else {
-                        HeapValue::Array(Rc::from(self.stack.split_off(self.stack.len() - min_len)))
-                    };
-                    self.heap_stack.push(result);
+                    self.heap_stack.push(zip_iter);
                 },
-
-                #[allow(unreachable_patterns)]
-                _ => unimplemented!("Opcode {:?} not implemented", opcode),
             }
         }
     }
@@ -823,6 +914,14 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
     match (hvalue, return_type) {
         (HeapValue::Array(arr), ast::Type::Array(typ)) => {
             Ok(TaggedValue::from_array(&arr, typ.as_ref()))
+        },
+        (HeapValue::LazyIter(iter), ast::Type::Iterator(typ)) => {
+            let arr = iter.clone().into_array();
+            unpack_heapvalue(HeapValue::Array(arr), &ast::Type::Array(typ.clone()))
+        },
+        (HeapValue::LazyIterHeap(iter), ast::Type::Iterator(typ)) => {
+            let arr = iter.clone().into_array();
+            unpack_heapvalue(HeapValue::ArrayHeap(arr), &ast::Type::Array(typ.clone()))
         },
         (HeapValue::String(s), ast::Type::String) => {
             Ok(TaggedValue::String(s.as_ref().clone()))
