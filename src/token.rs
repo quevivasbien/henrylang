@@ -16,6 +16,7 @@ pub enum TokenType {
     Dot,
     Colon,
     RightArrow,
+    At,
 
     Eq,
     NEq,
@@ -72,6 +73,7 @@ lazy_static! {
         map.insert('+', TokenType::Plus);
         map.insert('/', TokenType::Slash);
         map.insert('*', TokenType::Star);
+        map.insert('@', TokenType::At);
 
         map
     };

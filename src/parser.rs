@@ -156,6 +156,10 @@ lazy_static! {
             TokenType::To,
             ParseRule::new(None, Some(Parser::binary), Precedence::Range),
         );
+        map.insert(
+            TokenType::At,
+            ParseRule::new(Some(Parser::unary), None, Precedence::None),
+        );
 
         map.insert(
             TokenType::Eq,
@@ -405,7 +409,14 @@ impl Parser {
     fn binary(&mut self, left: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {
         let token = self.previous_token().clone();
         let rule = RULES.get(&token.ttype).unwrap();
-        let right = match self.parse_with_precedence(rule.precedence.next()) {
+        let precedence = if token.ttype == TokenType::RightArrow {
+            // right arrow has special precedence so that it is right associative
+            rule.precedence
+        }
+        else {
+            rule.precedence.next()
+        };
+        let right = match self.parse_with_precedence(precedence) {
             Some(expr) => expr,
             None => {
                 self.error(Some(

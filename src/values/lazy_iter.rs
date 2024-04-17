@@ -5,7 +5,7 @@ use dyn_clone::DynClone;
 
 use crate::VM;
 
-use super::{Closure, HeapValue, NativeFunction, Value};
+use super::{Closure, HeapValue, NativeFunction, TypeDef, Value};
 
 
 pub trait LazyIter<T: Clone>: DynClone + Debug {
@@ -71,7 +71,7 @@ impl RangeIter {
 
 impl LazyIter<Value> for RangeIter {
     fn next(&mut self) -> Option<Value> {
-        if self.current != self.end {
+        if self.current <= self.end {
             let value = self.current;
             self.current += 1;
             Some(Value::from_i64(value))
@@ -97,7 +97,7 @@ impl ReverseRangeIter {
 
 impl LazyIter<Value> for ReverseRangeIter {
     fn next(&mut self) -> Option<Value> {
-        if self.current != self.end {
+        if self.current >= self.end {
             let value = self.current;
             self.current -= 1;
             Some(Value::from_i64(value))
@@ -281,5 +281,260 @@ impl LazyIter<HeapValue> for MapIterNativeHeap<HeapValue> {
                 Some(vm.heap_stack.pop().expect("Expected result on stack"))
             }
         }
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct IndexIter<T: Debug + Clone> {
+    iter: Box<dyn LazyIter<Value>>,
+    collection: Rc<[T]>,
+}
+
+impl <T: Debug + Clone> IndexIter<T> {
+    pub fn new(iter: Box<dyn LazyIter<Value>>, collection: Rc<[T]>) -> Self {
+        Self { iter, collection }
+    }
+}
+
+impl LazyIter<Value> for IndexIter<Value> {
+    fn next(&mut self) -> Option<Value> {
+        match self.iter.next() {
+            None => None,
+            Some(x) => {
+                let mut idx = unsafe { x.i };
+                if idx < 0 {
+                    idx = self.collection.len() as i64 + idx;
+                }
+                if idx < 0 || idx >= self.collection.len() as i64 {
+                    return None;
+                }
+                let val = unsafe {
+                    self.collection.get_unchecked(idx as usize).clone()
+                };
+                Some(val)
+            }
+        }
+    }
+}
+
+impl LazyIter<HeapValue> for IndexIter<HeapValue> {
+    fn next(&mut self) -> Option<HeapValue> {
+        match self.iter.next() {
+            None => None,
+            Some(x) => {
+                let mut idx = unsafe { x.i };
+                if idx < 0 {
+                    idx = self.collection.len() as i64 + idx;
+                }
+                if idx < 0 || idx >= self.collection.len() as i64 {
+                    return None;
+                }
+                let val = unsafe {
+                    self.collection.get_unchecked(idx as usize).clone()
+                };
+                Some(val)
+            }
+        }
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct FilterIter<T: Debug + Clone> {
+    bool_iter: Box<dyn LazyIter<Value>>,
+    value_iter: Box<dyn LazyIter<T>>,
+}
+
+impl <T: Debug + Clone> FilterIter<T> {
+    pub fn new(bool_iter: Box<dyn LazyIter<Value>>, value_iter: Box<dyn LazyIter<T>>) -> Self {
+        Self { bool_iter, value_iter }
+    }
+}
+
+impl LazyIter<Value> for FilterIter<Value> {
+    fn next(&mut self) -> Option<Value> {
+        loop {
+            match (self.bool_iter.next(), self.value_iter.next()) {
+                (None, _) | (_, None) => return None,
+                (Some(v), Some(x)) => {
+                    if unsafe { v.b } {
+                        return Some(x);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl LazyIter<HeapValue> for FilterIter<HeapValue> {
+    fn next(&mut self) -> Option<HeapValue> {
+        loop {
+            match (self.bool_iter.next(), self.value_iter.next()) {
+                (None, _) | (_, None) => return None,
+                (Some(v), Some(x)) => {
+                    if unsafe { v.b } {
+                        return Some(x);
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct ZipIter {
+    iters: Vec<Box<dyn LazyIter<Value>>>,
+    heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>,
+    closure: Box<Closure>,
+    vm: *mut VM,
+}
+
+impl ZipIter {
+    pub fn new(iters: Vec<Box<dyn LazyIter<Value>>>, heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>, closure: Box<Closure>, vm: *mut VM) -> Self {
+        Self { iters, heap_iters, closure, vm }
+    }
+
+    fn _next(&mut self) -> Option<()> {
+        let vm = unsafe { &mut *self.vm };
+        let mut stack_values = Vec::new();
+        let mut heap_stack_values = Vec::new();
+        for iter in self.iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    stack_values.push(x);
+                }
+            }
+        }
+        for iter in self.heap_iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    heap_stack_values.push(x);
+                }
+            }
+        }
+        vm.stack.append(&mut stack_values);
+        vm.heap_stack.append(&mut heap_stack_values);
+        vm.call_function(self.closure.clone()).expect("Unrecoverable error in zip iterator");
+        Some(())
+    }
+}
+
+impl LazyIter<Value> for ZipIter {
+    fn next(&mut self) -> Option<Value> {
+        self._next()?;
+        let vm = unsafe { &mut *self.vm };
+        vm.stack.pop()
+    }
+}
+
+impl LazyIter<HeapValue> for ZipIter {
+    fn next(&mut self) -> Option<HeapValue> {
+        self._next()?;
+        let vm = unsafe { &mut *self.vm };
+        vm.heap_stack.pop()
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct ZipIterNative {
+    iters: Vec<Box<dyn LazyIter<Value>>>,
+    heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>,
+    function: &'static NativeFunction,
+    vm: *mut VM,
+}
+
+impl ZipIterNative {
+    pub fn new(iters: Vec<Box<dyn LazyIter<Value>>>, heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>, function: &'static NativeFunction, vm: *mut VM) -> Self {
+        Self { iters, heap_iters, function, vm }
+    }
+
+    fn _next(&mut self) -> Option<()> {
+        let vm = unsafe { &mut *self.vm };
+        let mut stack_values = Vec::new();
+        let mut heap_stack_values = Vec::new();
+        for iter in self.iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    stack_values.push(x);
+                }
+            }
+        }
+        for iter in self.heap_iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    heap_stack_values.push(x);
+                }
+            }
+        }
+        vm.stack.append(&mut stack_values);
+        vm.heap_stack.append(&mut heap_stack_values);
+        vm.call_native_function(self.function).expect("Unrecoverable error in zip iterator");
+        Some(())
+    }
+}
+
+impl LazyIter<Value> for ZipIterNative {
+    fn next(&mut self) -> Option<Value> {
+        self._next()?;
+        let vm = unsafe { &mut *self.vm };
+        vm.stack.pop()
+    }
+}
+
+impl LazyIter<HeapValue> for ZipIterNative {
+    fn next(&mut self) -> Option<HeapValue> {
+        self._next()?;
+        let vm = unsafe { &mut *self.vm };
+        vm.heap_stack.pop()
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct ZipIterTypeDef {
+    iters: Vec<Box<dyn LazyIter<Value>>>,
+    heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>,
+    typedef: Rc<TypeDef>,
+    vm: *mut VM,
+}
+
+impl ZipIterTypeDef {
+    pub fn new(iters: Vec<Box<dyn LazyIter<Value>>>, heap_iters: Vec<Box<dyn LazyIter<HeapValue>>>, typedef: Rc<TypeDef>, vm: *mut VM) -> Self {
+        Self { iters, heap_iters, typedef, vm }
+    }
+}
+
+impl LazyIter<HeapValue> for ZipIterTypeDef {
+    fn next(&mut self) -> Option<HeapValue> {
+        let vm = unsafe { &mut *self.vm };
+        let mut stack_values = Vec::new();
+        let mut heap_stack_values = Vec::new();
+        for iter in self.iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    stack_values.push(x);
+                }
+            }
+        }
+        for iter in self.heap_iters.iter_mut().rev() {
+            match iter.next() {
+                None => return None,
+                Some(x) => {
+                    heap_stack_values.push(x);
+                }
+            }
+        }
+        vm.stack.append(&mut stack_values);
+        vm.heap_stack.append(&mut heap_stack_values);
+        vm.create_object(self.typedef.clone()).expect("Unrecoverable error in zip iterator");
+        vm.heap_stack.pop()
     }
 }

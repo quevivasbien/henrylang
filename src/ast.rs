@@ -223,6 +223,15 @@ impl Expression for TypeAnnotation {
                 }
                 Ok(Type::Array(Box::new(child_types[0].clone())))
             },
+            "Iterator" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Iterator must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Iterator(Box::new(child_types[0].clone())))
+            },
             "Maybe" => {
                 if child_types.len() != 1 {
                     return Err(format!(
@@ -468,7 +477,16 @@ impl Unary {
 
 impl Expression for Unary {
     fn get_type(&self) -> Result<Type, String> {
-        self.right.get_type()
+        let right_type = self.right.get_type()?;
+        if self.op == TokenType::At {
+            match right_type {
+                Type::Iterator(typ) => Ok(Type::Array(typ)),
+                x => Err(format!("@ operator must be used with an iterator, got {:?}", x)),
+            }
+        }
+        else {
+            Ok(right_type)
+        }
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -503,6 +521,13 @@ impl Expression for Unary {
                     x
                 ))
             },
+            Type::Iterator(_) => match self.op {
+                TokenType::At => compiler.write_opcode(OpCode::Collect),
+                x => return Err(format!(
+                    "Unary operator {:?} is not defined for type Iterator",
+                    x
+                ))
+            }
             x => return Err(format!("Type {:?} not yet supported for unary operation", x)),
         };
         Ok(())
@@ -570,7 +595,7 @@ impl Expression for Binary {
         if self.op == TokenType::RightArrow {
             if let Type::Iterator(arr_type) | Type::Array(arr_type) = &right_type {
                 match &left_type {
-                    Type::Array(_) | Type::String => {
+                    Type::Array(_) => {
                         if arr_type.as_ref() != &Type::Int {
                             return Err(format!(
                                 "Cannot map from type {:?} using non-integer type {:?}",
@@ -1258,9 +1283,9 @@ impl Expression for Reduce {
         };
         let func_arg_type = func_arg_type[0].clone();
         let array_type = match self.array.get_type()? {
-            Type::Array(x) => *x,
+            Type::Array(x) | Type::Iterator(x) => *x,
             x => return Err(format!(
-                "Reduce array must be an array; got a {:?}", x
+                "Second argument of reduce must be an array or iterator; got a {:?}", x
             ))
         };
         if array_type != func_arg_type {
@@ -1288,15 +1313,10 @@ impl Expression for Reduce {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        self.function.compile(compiler)?;
-        self.array.compile(compiler)?;
         self.init.compile(compiler)?;
-        if self.get_type()?.is_heap() {
-            compiler.write_opcode(OpCode::HeapReduce);
-        }
-        else {
-            compiler.write_opcode(OpCode::Reduce);
-        }
+        self.array.compile(compiler)?;
+        self.function.compile(compiler)?;
+        compiler.write_opcode(OpCode::Reduce);
         Ok(())
     }
 }
@@ -1334,9 +1354,9 @@ impl Expression for Filter {
             ));
         }
         let array_type = match self.array.get_type()? {
-            Type::Array(x) => *x,
+            Type::Array(x) | Type::Iterator(x) => *x,
             x => return Err(format!(
-                "Filter array must be an array; got a {:?}", x
+                "Second filter argumetn must be an array or iterator; got a {:?}", x
             ))
         };
         if array_type != func_arg_type {
@@ -1344,7 +1364,7 @@ impl Expression for Filter {
                 "Filter function argument and array must have the same type; got {:?} and {:?}", func_arg_type, array_type
             ));
         }
-        Ok(self.array.get_type()?)
+        Ok(Type::Iterator(Box::new(array_type.clone())))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -1427,9 +1447,9 @@ impl Expression for ZipMap {
         let mut expr_types = Vec::new();
         for expr in self.exprs.iter() {
             match expr.get_type()? {
-                Type::Array(t) => expr_types.push(*t),
+                Type::Array(t) | Type::Iterator(t) => expr_types.push(*t),
                 x => return Err(format!(
-                    "ZipMap expression must be an array; got a {:?}", x
+                    "ZipMap expression must be an array or iterator; got a {:?}", x
                 ))
             }
         }
@@ -1438,7 +1458,7 @@ impl Expression for ZipMap {
                 "ZipMap function argument and arrays must have matching types; got {:?} and {:?}", func_arg_types, expr_types
             ));
         }
-        Ok(Type::Array(Box::new(func_ret_type)))
+        Ok(Type::Iterator(Box::new(func_ret_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;

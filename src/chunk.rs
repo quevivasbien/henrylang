@@ -59,6 +59,7 @@ pub enum OpCode {
     IntNegate,
     FloatNegate,
     Not,
+    Collect,
 
     EndExpr,
     EndHeapExpr,
@@ -89,10 +90,9 @@ pub enum OpCode {
     Unwrap,
     UnwrapHeap,
 
-    // Array ops
+    // Array/Iterator ops
     Map,
     Reduce,
-    HeapReduce,
     Filter,
     Len,
     ZipMap,
