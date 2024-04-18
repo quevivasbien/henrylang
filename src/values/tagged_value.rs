@@ -12,8 +12,8 @@ pub enum TaggedValue {
     Int(i64),
     Float(f64),
     Bool(bool),
-    String(String),
-    Array(Vec<TaggedValue>),
+    Str(String),
+    Arr(Vec<TaggedValue>),
     Maybe(Option<Box<TaggedValue>>),
     Closure(Box<Closure>),
     TypeDef(Rc<TypeDef>),
@@ -26,8 +26,8 @@ impl Display for TaggedValue {
             TaggedValue::Int(i) => write!(f, "{}", i),
             TaggedValue::Float(fl) => write!(f, "{:.?}", fl),
             TaggedValue::Bool(b) => write!(f, "{}", b),
-            TaggedValue::String(s) => write!(f, "{}", s),
-            TaggedValue::Array(arr) => {
+            TaggedValue::Str(s) => write!(f, "{}", s),
+            TaggedValue::Arr(arr) => {
                 write!(f, "[")?;
                 for (i, v) in arr.iter().enumerate() {
                     if i != 0 {
@@ -73,7 +73,7 @@ impl TaggedValue {
         })
     }
     pub fn from_array(arr: &[Value], typ: &ast::Type) -> TaggedValue {
-        TaggedValue::Array(arr.iter().map(|x| {
+        TaggedValue::Arr(arr.iter().map(|x| {
             match typ {
                 ast::Type::Int => TaggedValue::Int(unsafe { x.i }),
                 ast::Type::Float => TaggedValue::Float(unsafe { x.f }),

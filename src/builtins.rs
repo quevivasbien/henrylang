@@ -183,23 +183,23 @@ lazy_static! {
 
 pub fn builtin_types() -> FxHashMap<String, Type> {
     let mut map = FxHashMap::default();
-    map.insert("print".to_string(), Type::Function(vec![Type::String], Box::new(Type::String)));
-    map.insert("time".to_string(), Type::Function(vec![], Box::new(Type::Int)));
-    map.insert("itof".to_string(), Type::Function(vec![Type::Int], Box::new(Type::Float)));
-    map.insert("ftoi".to_string(), Type::Function(vec![Type::Float], Box::new(Type::Int)));
+    map.insert("print".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
+    map.insert("time".to_string(), Type::Func(vec![], Box::new(Type::Int)));
+    map.insert("itof".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
+    map.insert("ftoi".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
 
-    map.insert("mod".to_string(), Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
-    map.insert("powi".to_string(), Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
-    map.insert("powf".to_string(), Type::Function(vec![Type::Float, Type::Float], Box::new(Type::Float)));
+    map.insert("mod".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+    map.insert("powi".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+    map.insert("powf".to_string(), Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)));
 
-    map.insert("sumi".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Int))], Box::new(Type::Int)));
-    map.insert("prodi".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("sumi".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("prodi".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
 
-    map.insert("sumf".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Float))], Box::new(Type::Float)));
-    map.insert("prodf".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("sumf".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("prodf".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
 
-    map.insert("all".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
-    map.insert("any".to_string(), Type::Function(vec![Type::Iterator(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("all".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("any".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
     
     map.insert("E".to_string(), Type::Float);
 

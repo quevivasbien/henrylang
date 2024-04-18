@@ -355,7 +355,7 @@ impl Parser {
     }
     fn string(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();
-        Box::new(ast::Literal::new(ast::Type::String, token.text.clone()))
+        Box::new(ast::Literal::new(ast::Type::Str, token.text.clone()))
     }
     fn boolean(&mut self) -> Box<dyn ast::Expression> {
         let token = self.previous_token();

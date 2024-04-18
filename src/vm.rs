@@ -912,19 +912,19 @@ fn unpack_result(result: ReturnValue, return_type: &ast::Type) -> Result<TaggedV
 
 fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<TaggedValue, String> {
     match (hvalue, return_type) {
-        (HeapValue::Array(arr), ast::Type::Array(typ)) => {
+        (HeapValue::Array(arr), ast::Type::Arr(typ)) => {
             Ok(TaggedValue::from_array(&arr, typ.as_ref()))
         },
-        (HeapValue::LazyIter(iter), ast::Type::Iterator(typ)) => {
+        (HeapValue::LazyIter(iter), ast::Type::Iter(typ)) => {
             let arr = iter.clone().into_array();
-            unpack_heapvalue(HeapValue::Array(arr), &ast::Type::Array(typ.clone()))
+            unpack_heapvalue(HeapValue::Array(arr), &ast::Type::Arr(typ.clone()))
         },
-        (HeapValue::LazyIterHeap(iter), ast::Type::Iterator(typ)) => {
+        (HeapValue::LazyIterHeap(iter), ast::Type::Iter(typ)) => {
             let arr = iter.clone().into_array();
-            unpack_heapvalue(HeapValue::ArrayHeap(arr), &ast::Type::Array(typ.clone()))
+            unpack_heapvalue(HeapValue::ArrayHeap(arr), &ast::Type::Arr(typ.clone()))
         },
-        (HeapValue::String(s), ast::Type::String) => {
-            Ok(TaggedValue::String(s.as_ref().clone()))
+        (HeapValue::String(s), ast::Type::Str) => {
+            Ok(TaggedValue::Str(s.as_ref().clone()))
         },
         (HeapValue::Maybe(x), ast::Type::Maybe(typ)) => {
             TaggedValue::from_maybe(x, typ.as_ref())
@@ -935,29 +935,29 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
                 None => Ok(TaggedValue::Maybe(None)),
             }
         },
-        (HeapValue::ArrayHeap(arr), ast::Type::Array(typ)) => {
+        (HeapValue::ArrayHeap(arr), ast::Type::Arr(typ)) => {
             match typ.as_ref() {
-                ast::Type::String => {
+                ast::Type::Str => {
                     let mut arr_s = Vec::new();
                     for inner in arr.iter() {
                         let s = match inner {
                             HeapValue::String(s) => s,
                             _ => unreachable!()
                         };
-                        arr_s.push(TaggedValue::String(s.as_ref().clone()));
+                        arr_s.push(TaggedValue::Str(s.as_ref().clone()));
                     }
-                    Ok(TaggedValue::Array(arr_s))
+                    Ok(TaggedValue::Arr(arr_s))
                 },
                 typ => {
                     let mut arr_arr = Vec::new();
                     for inner_arr in arr.iter().cloned() {
                         arr_arr.push(unpack_heapvalue(inner_arr, typ)?);
                     }
-                    Ok(TaggedValue::Array(arr_arr))
+                    Ok(TaggedValue::Arr(arr_arr))
                 }
             }
         },
-        (HeapValue::Closure(f), ast::Type::Function(..)) => {
+        (HeapValue::Closure(f), ast::Type::Func(..)) => {
             Ok(TaggedValue::Closure(f))
         },
         (HeapValue::TypeDef(t), _) => {

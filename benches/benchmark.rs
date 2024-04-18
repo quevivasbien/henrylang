@@ -13,6 +13,52 @@ macro_rules! run_expect_value {
     }
 }
 
+fn approx_e() -> f64 {
+    let source = "
+    factorial := |x: Int| {
+        if x <= 1 {
+            1
+        }
+        else {
+            prodi(1 to x)
+        }
+    }
+    
+    approx_e := |n: Int|: Float {
+        if n = 0 {
+            1.0
+        }
+        else {
+            1.0 / itof(factorial(n)) + approx_e(n-1)
+        }
+    }
+    
+    approx_e(100)
+    ";
+    run_expect_value!(source, Float)
+}
+
+fn arcsin() -> f64 {
+    let source = "
+    asin := |x: Float, n: Int| {
+        iter := |n: Int|: Float {
+            if n = 0 {
+                x
+            }
+            else {
+                prodf(|x:Int|{itof(x)/itof(x+1)} -> filter(|x:Int|{mod(x, 2)=1}, 1 to (2*n)))
+                    * powf(x, itof(n*2+1)) / itof(n*2+1)
+                    + iter(n-1)
+            }
+        }
+        iter(n)
+    }
+    
+    asin(0.5, 100)
+    ";
+    run_expect_value!(source, Float)
+}
+
 fn fibonacci() -> i64 {
     let source = "fib_helper := |n: Int, x: Int, y: Int|: Int {
         z := x + y
@@ -55,10 +101,24 @@ fn sum_primes() -> i64 {
     run_expect_value!(source, Int)
 }
 
+fn criterion_taylor_series(c: &mut Criterion) {
+    let mut group = c.benchmark_group("taylor_series");
+    group.sample_size(50);
+    group.bench_function(
+        "euler",
+        move |b| b.iter(approx_e)
+    );
+    group.bench_function(
+        "arcsin",
+        move |b| b.iter(arcsin)
+    );
+    group.finish();
+}
+
 fn criterion_fibonacci(c: &mut Criterion) {
     c.bench_function(
         "fibonacci",
-        move |b| b.iter(|| fibonacci())
+        move |b| b.iter(fibonacci)
     );
 }
 
@@ -72,5 +132,5 @@ fn criterion_primes(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, criterion_fibonacci, criterion_primes);
+criterion_group!(benches, criterion_taylor_series, criterion_fibonacci, criterion_primes);
 criterion_main!(benches);

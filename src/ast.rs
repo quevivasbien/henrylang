@@ -14,18 +14,18 @@ use crate::token::TokenType;
 pub enum Type {
     Int,
     Float,
-    String,
+    Str,
     Bool,
-    Array(Box<Type>),
-    Iterator(Box<Type>),
+    Arr(Box<Type>),
+    Iter(Box<Type>),
     Maybe(Box<Type>),
-    Function(Vec<Type>, Box<Type>),
+    Func(Vec<Type>, Box<Type>),
     Object(String, Vec<(String, Type)>)
 }
 
 impl Type {
     pub fn is_heap(&self) -> bool {
-        matches!(self, Self::String | Self::Array(_) | Self::Iterator(_) | Self::Maybe(_) | Self::Function(_, _) | Self::Object(_, _))
+        matches!(self, Self::Str | Self::Arr(_) | Self::Iter(_) | Self::Maybe(_) | Self::Func(_, _) | Self::Object(_, _))
     }
 }
 
@@ -115,6 +115,111 @@ impl Expression for ErrorExpression {
     }
 }
 
+
+#[derive(Debug)]
+pub struct TypeAnnotation {
+    typename: String,
+    children: Vec<TypeAnnotation>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl TypeAnnotation {
+    pub fn new(typename: String, children: Vec<TypeAnnotation>) -> Self {
+        Self { typename, children, parent: None }
+    }
+
+    fn resolve_typedef(&self) -> Result<Type, String> {
+        let parent = match self.parent {
+            Some(x) => x,
+            None => return Err(format!("Could not resolve type for {}; parent is None", self.typename)),
+        };
+        let typ = resolve_type(&self.typename, parent)?;
+        let objtype = match typ {
+            Type::Func(_, t) => *t,
+            _ => return Err(format!("When resolving type, expected an Object definition, but got {:?}", typ)),
+        };
+        if let Type::Object(n, _) = &objtype {
+            debug_assert_eq!(n, &self.typename);
+            Ok(objtype)
+        }
+        else {
+            Err(format!("When resolving type, expected an Object definition, but got {:?}", objtype))
+        }
+    }
+}
+
+impl Expression for TypeAnnotation {
+    fn get_type(&self) -> Result<Type, String> {
+        if self.children.is_empty() {
+            return match self.typename.as_str() {
+                "Int" => Ok(Type::Int),
+                "Float" => Ok(Type::Float),
+                "Str" => Ok(Type::Str),
+                "Bool" => Ok(Type::Bool),
+                _ => self.resolve_typedef(),
+            }
+        }
+        let child_types = self.children.iter().map(|a| a.get_type()).collect::<Result<Vec<Type>, String>>()?;
+        match self.typename.as_str() {
+            "Func" => {
+                if child_types.len() < 1 {
+                    return Err(format!(
+                        "Function must be annotated with at least a return type"
+                    ));
+                }
+                Ok(Type::Func(
+                    child_types[..child_types.len()-1].to_vec(),
+                    Box::new(child_types[child_types.len()-1].clone())
+                ))
+            },
+            "Arr" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Array must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Arr(Box::new(child_types[0].clone())))
+            },
+            "Iter" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Iterator must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Iter(Box::new(child_types[0].clone())))
+            },
+            "Maybe" => {
+                if child_types.len() != 1 {
+                    return Err(format!(
+                        "Maybe must be annotated with exactly one type, but got {:?}",
+                        child_types
+                    ));
+                }
+                Ok(Type::Maybe(Box::new(child_types[0].clone())))
+            },
+            _ => unimplemented!("Unknown type annotation: {}", self.typename)
+        }
+    }
+    
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        for c in self.children.iter_mut() {
+            c.set_parent(Some(self_ptr))
+        }
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+
 #[derive(Debug)]
 pub struct ASTTopLevel {
     types: Vec<VarType>,
@@ -154,109 +259,6 @@ impl Expression for ASTTopLevel {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         self.child.compile(compiler)?;
         compiler.write_opcode(OpCode::Return);
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct TypeAnnotation {
-    typename: String,
-    children: Vec<TypeAnnotation>,
-    parent: Option<*const dyn Expression>,
-}
-
-impl TypeAnnotation {
-    pub fn new(typename: String, children: Vec<TypeAnnotation>) -> Self {
-        Self { typename, children, parent: None }
-    }
-
-    fn resolve_typedef(&self) -> Result<Type, String> {
-        let parent = match self.parent {
-            Some(x) => x,
-            None => return Err(format!("Could not resolve type for {}; parent is None", self.typename)),
-        };
-        let typ = resolve_type(&self.typename, parent)?;
-        let objtype = match typ {
-            Type::Function(_, t) => *t,
-            _ => return Err(format!("When resolving type, expected an Object definition, but got {:?}", typ)),
-        };
-        if let Type::Object(n, _) = &objtype {
-            debug_assert_eq!(n, &self.typename);
-            Ok(objtype)
-        }
-        else {
-            Err(format!("When resolving type, expected an Object definition, but got {:?}", objtype))
-        }
-    }
-}
-
-impl Expression for TypeAnnotation {
-    fn get_type(&self) -> Result<Type, String> {
-        if self.children.is_empty() {
-            return match self.typename.as_str() {
-                "Int" => Ok(Type::Int),
-                "Float" => Ok(Type::Float),
-                "String" => Ok(Type::String),
-                "Bool" => Ok(Type::Bool),
-                _ => self.resolve_typedef(),
-            }
-        }
-        let child_types = self.children.iter().map(|a| a.get_type()).collect::<Result<Vec<Type>, String>>()?;
-        match self.typename.as_str() {
-            "Function" => {
-                if child_types.len() < 1 {
-                    return Err(format!(
-                        "Function must be annotated with at least a return type"
-                    ));
-                }
-                Ok(Type::Function(
-                    child_types[..child_types.len()-1].to_vec(),
-                    Box::new(child_types[child_types.len()-1].clone())
-                ))
-            },
-            "Array" => {
-                if child_types.len() != 1 {
-                    return Err(format!(
-                        "Array must be annotated with exactly one type, but got {:?}",
-                        child_types
-                    ));
-                }
-                Ok(Type::Array(Box::new(child_types[0].clone())))
-            },
-            "Iterator" => {
-                if child_types.len() != 1 {
-                    return Err(format!(
-                        "Iterator must be annotated with exactly one type, but got {:?}",
-                        child_types
-                    ));
-                }
-                Ok(Type::Iterator(Box::new(child_types[0].clone())))
-            },
-            "Maybe" => {
-                if child_types.len() != 1 {
-                    return Err(format!(
-                        "Maybe must be annotated with exactly one type, but got {:?}",
-                        child_types
-                    ));
-                }
-                Ok(Type::Maybe(Box::new(child_types[0].clone())))
-            },
-            _ => unimplemented!("Unknown type annotation: {}", self.typename)
-        }
-    }
-    
-    fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
-        self.parent = parent;
-        let self_ptr = self as *const dyn Expression;
-        for c in self.children.iter_mut() {
-            c.set_parent(Some(self_ptr))
-        }
-    }
-    fn get_parent(&self) -> Option<*const dyn Expression> {
-        self.parent
-    }
-
-    fn compile(&self, _compiler: &mut Compiler) -> Result<(), String> {
         Ok(())
     }
 }
@@ -350,7 +352,7 @@ impl Function {
             Some(rtype) => rtype.get_type()?,
         };
         let param_types = self.param_types()?;
-        Ok(Some(Type::Function(param_types, Box::new(return_type))))
+        Ok(Some(Type::Func(param_types, Box::new(return_type))))
     }
 }
 
@@ -364,7 +366,7 @@ impl Expression for Function {
                 return Err(format!("Function return type {:?} does not match type {:?} specified in type annotation", return_type, rtype));
             }
         }
-        Ok(Type::Function(param_types, Box::new(return_type)))
+        Ok(Type::Func(param_types, Box::new(return_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -393,7 +395,7 @@ impl Expression for Function {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let mut inner_compiler = Compiler::new_from(compiler);
         let (ptypes, rtype) = match self.get_type()? {
-            Type::Function(ptypes, rtype) => (ptypes, *rtype),
+            Type::Func(ptypes, rtype) => (ptypes, *rtype),
             _ => unreachable!(),
         };
         
@@ -451,7 +453,7 @@ impl Expression for Literal {
             Type::Int => Value::from_i64(self.value.parse::<i64>().unwrap()),
             Type::Float => Value::from_f64(self.value.parse::<f64>().unwrap()),
             Type::Bool => Value::from_bool(self.value.parse::<bool>().unwrap()),
-            Type::String => {
+            Type::Str => {
                 let string = self.value[1..self.value.len() - 1].to_string();
                 return compiler.write_string(string);
             },
@@ -480,7 +482,7 @@ impl Expression for Unary {
         let right_type = self.right.get_type()?;
         if self.op == TokenType::At {
             match right_type {
-                Type::Iterator(typ) => Ok(Type::Array(typ)),
+                Type::Iter(typ) => Ok(Type::Arr(typ)),
                 x => Err(format!("@ operator must be used with an iterator, got {:?}", x)),
             }
         }
@@ -521,7 +523,7 @@ impl Expression for Unary {
                     x
                 ))
             },
-            Type::Iterator(_) => match self.op {
+            Type::Iter(_) => match self.op {
                 TokenType::At => compiler.write_opcode(OpCode::Collect),
                 x => return Err(format!(
                     "Unary operator {:?} is not defined for type Iterator",
@@ -562,13 +564,13 @@ impl Expression for Binary {
             | TokenType::LEq
             | TokenType::GT
             | TokenType::LT => Ok(Type::Bool),
-            TokenType::To => Ok(Type::Iterator(Box::new(Type::Int))),
+            TokenType::To => Ok(Type::Iter(Box::new(Type::Int))),
             TokenType::RightArrow => {
                 let left_type = self.left.get_type()?;
                 match left_type {
-                    Type::Function(_, typ) => Ok(Type::Iterator(Box::new(*typ))),
-                    Type::Array(typ) => Ok(Type::Iterator(Box::new(*typ))),
-                    Type::String => Ok(Type::Iterator(Box::new(Type::String))),
+                    Type::Func(_, typ) => Ok(Type::Iter(Box::new(*typ))),
+                    Type::Arr(typ) => Ok(Type::Iter(Box::new(*typ))),
+                    Type::Str => Ok(Type::Iter(Box::new(Type::Str))),
                     typ => Err(format!("Cannot use '->' on type {:?}", typ))
                 }
             }
@@ -593,9 +595,9 @@ impl Expression for Binary {
         self.right.compile(compiler)?;
 
         if self.op == TokenType::RightArrow {
-            if let Type::Iterator(arr_type) | Type::Array(arr_type) = &right_type {
+            if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
                 match &left_type {
-                    Type::Array(_) => {
+                    Type::Arr(_) => {
                         if arr_type.as_ref() != &Type::Int {
                             return Err(format!(
                                 "Cannot map from type {:?} using non-integer type {:?}",
@@ -603,7 +605,7 @@ impl Expression for Binary {
                             ));
                         }
                     },
-                    Type::Function(arg_type, _) => {
+                    Type::Func(arg_type, _) => {
                         if arg_type.len() != 1 {
                             return Err(format!("Cannot map with a function does not have a single argument; got a function with {} arguments", arg_type.len()));
                         }
@@ -676,7 +678,7 @@ impl Expression for Binary {
                     ))
                 })
             },
-            Type::String => {
+            Type::Str => {
                 compiler.write_opcode(match self.op {
                     TokenType::Eq => OpCode::HeapEqual,
                     TokenType::NEq => OpCode::HeapNotEqual,
@@ -687,7 +689,7 @@ impl Expression for Binary {
                     ))
                 })
             },
-            Type::Array(t) => {
+            Type::Arr(t) => {
                 compiler.write_opcode(match self.op {
                     TokenType::Eq => OpCode::HeapEqual,
                     TokenType::NEq => OpCode::HeapNotEqual,
@@ -722,10 +724,10 @@ impl Call {
 impl Expression for Call {
     fn get_type(&self) -> Result<Type, String> {
         match self.callee.get_type() {
-            Ok(Type::Function(_, return_type)) => {
+            Ok(Type::Func(_, return_type)) => {
                 Ok(*return_type)
             },
-            Ok(Type::Array(typ)) => Ok(*typ),
+            Ok(Type::Arr(typ)) => Ok(*typ),
             Ok(ctype) => {
                 Err(format!(
                     "Tried to call an expression of type {:?}, which is not callable", ctype
@@ -751,8 +753,8 @@ impl Expression for Call {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let callee_type = self.callee.get_type()?;
         let (paramtypes, _return_type) = match callee_type {
-            Type::Function(argtypes, return_type) => (argtypes, *return_type),
-            Type::Array(typ) => (vec![Type::Int], *typ),
+            Type::Func(argtypes, return_type) => (argtypes, *return_type),
+            Type::Arr(typ) => (vec![Type::Int], *typ),
             _ => return Err(format!(
                 "Cannot call an expression of type {:?}", callee_type
             )),
@@ -972,7 +974,7 @@ impl Array {
 impl Expression for Array {
     fn get_type(&self) -> Result<Type, String> {
         match &self.elements {
-            ArrayElems::Empty(t) => Ok(Type::Array(Box::new(t.get_type()?))),
+            ArrayElems::Empty(t) => Ok(Type::Arr(Box::new(t.get_type()?))),
             ArrayElems::Elements(elems) => {
                 let first_type = elems[0].get_type()?;
                 for elem in elems.iter() {
@@ -983,7 +985,7 @@ impl Expression for Array {
                         ));
                     }
                 };
-                Ok(Type::Array(Box::new(first_type)))
+                Ok(Type::Arr(Box::new(first_type)))
             }
         }
     }
@@ -1016,7 +1018,7 @@ impl Expression for Array {
             ArrayElems::Empty(_) => 0,
         };
         let typ = match self.get_type()? {
-            Type::Array(t) => t,
+            Type::Arr(t) => t,
             _ => unreachable!()
         };
         if typ.is_heap() {
@@ -1053,7 +1055,7 @@ impl Expression for TypeDef {
     fn get_type(&self) -> Result<Type, String> {
         let field_types = self.field_types()?;
         let types_only = field_types.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
-        Ok(Type::Function(
+        Ok(Type::Func(
             types_only,
             Box::new(Type::Object(self.name.clone(), field_types))
         ))
@@ -1271,7 +1273,7 @@ impl Reduce {
 impl Expression for Reduce {
     fn get_type(&self) -> Result<Type, String> {
         let (func_arg_type, func_ret_type) = match self.function.get_type()? {
-            Type::Function(arg, ret) => (arg, *ret),
+            Type::Func(arg, ret) => (arg, *ret),
             x => return Err(format!(
                 "Reduce function must be a function; got a {:?}", x
             )),
@@ -1283,7 +1285,7 @@ impl Expression for Reduce {
         };
         let func_arg_type = func_arg_type[0].clone();
         let array_type = match self.array.get_type()? {
-            Type::Array(x) | Type::Iterator(x) => *x,
+            Type::Arr(x) | Type::Iter(x) => *x,
             x => return Err(format!(
                 "Second argument of reduce must be an array or iterator; got a {:?}", x
             ))
@@ -1337,7 +1339,7 @@ impl Filter {
 impl Expression for Filter {
     fn get_type(&self) -> Result<Type, String> {
         let (func_arg_type, func_ret_type) = match self.function.get_type()? {
-            Type::Function(arg, ret) => (arg, *ret),
+            Type::Func(arg, ret) => (arg, *ret),
             x => return Err(format!(
                 "Filter function must be a function; got a {:?}", x
             )),
@@ -1354,7 +1356,7 @@ impl Expression for Filter {
             ));
         }
         let array_type = match self.array.get_type()? {
-            Type::Array(x) | Type::Iterator(x) => *x,
+            Type::Arr(x) | Type::Iter(x) => *x,
             x => return Err(format!(
                 "Second filter argumetn must be an array or iterator; got a {:?}", x
             ))
@@ -1364,7 +1366,7 @@ impl Expression for Filter {
                 "Filter function argument and array must have the same type; got {:?} and {:?}", func_arg_type, array_type
             ));
         }
-        Ok(Type::Iterator(Box::new(array_type.clone())))
+        Ok(Type::Iter(Box::new(array_type.clone())))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -1399,7 +1401,7 @@ impl Len {
 impl Expression for Len {
     fn get_type(&self) -> Result<Type, String> {
         match self.expr.get_type()? {
-            Type::Array(_) | Type::String => Ok(Type::Int),
+            Type::Arr(_) | Type::Str => Ok(Type::Int),
             x => Err(format!(
                 "Len expression must be an array or string; got a {:?}", x
             )),
@@ -1439,7 +1441,7 @@ impl ZipMap {
 impl Expression for ZipMap {
     fn get_type(&self) -> Result<Type, String> {
         let (func_arg_types, func_ret_type) = match self.function.get_type()? {
-            Type::Function(arg, ret) => (arg, *ret),
+            Type::Func(arg, ret) => (arg, *ret),
             x => return Err(format!(
                 "ZipMap function must be a function; got a {:?}", x
             ))
@@ -1447,7 +1449,7 @@ impl Expression for ZipMap {
         let mut expr_types = Vec::new();
         for expr in self.exprs.iter() {
             match expr.get_type()? {
-                Type::Array(t) | Type::Iterator(t) => expr_types.push(*t),
+                Type::Arr(t) | Type::Iter(t) => expr_types.push(*t),
                 x => return Err(format!(
                     "ZipMap expression must be an array or iterator; got a {:?}", x
                 ))
@@ -1458,7 +1460,7 @@ impl Expression for ZipMap {
                 "ZipMap function argument and arrays must have matching types; got {:?} and {:?}", func_arg_types, expr_types
             ));
         }
-        Ok(Type::Iterator(Box::new(func_ret_type)))
+        Ok(Type::Iter(Box::new(func_ret_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;

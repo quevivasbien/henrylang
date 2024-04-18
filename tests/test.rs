@@ -108,7 +108,7 @@ fn test_closure() {
 
     let source = "
     f := |x: Int| { x + 1 }
-    g := |s: String, f: Function(Int, Int)| { f(len(s)) }
+    g := |s: Str, f: Func(Int, Int)| { f(len(s)) }
 
     g(\"hello\", f)
     ";
@@ -123,7 +123,7 @@ fn test_object() {
     myobj := type {
         a: Int
         b: Int
-        c: String
+        c: Str
     }
     x := myobj(1, 2, \"henry\")
     y := myobj(-1, -2, \"henry\")
@@ -137,7 +137,7 @@ fn test_object() {
     let source = "
     T := type {
         a: Int
-        b: Array(String),
+        b: Arr(Str),
     }
     
     U := type {
@@ -153,20 +153,20 @@ fn test_object() {
     f(u)
     ";
 
-    let result = run_expect_value!(source, String);
+    let result = run_expect_value!(source, Str);
     assert_eq!(result, "hello there");
 
     let source = "
     T := type {
         a: Int
-        b: Array(String),
+        b: Arr(Str),
     }
     
-    x := []: Maybe(T) + [some(T(1, []:String)), {}: T]
+    x := []: Maybe(T) + [some(T(1, []:Str)), {}: T]
     x
     ";
 
-    run_expect_value!(source, Array);
+    run_expect_value!(source, Arr);
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn test_maybe() {
 #[test]
 fn test_reduce() {
     let source = "
-    sum := |arr: Iterator(Int)| {
+    sum := |arr: Iter(Int)| {
         reduce(|acc: Int, x: Int| {acc + x}, arr, 0)
     }
     
@@ -200,7 +200,7 @@ fn test_reduce() {
     assert!(result);
 
     let source = "
-    my_all := |arr: Iterator(Bool)| {
+    my_all := |arr: Iter(Bool)| {
         reduce(|acc: Bool, x: Bool|{acc and x}, arr, true)
     }
     
@@ -213,15 +213,15 @@ fn test_reduce() {
     let result = run_expect_value!(source, Bool);
     assert!(result);
 
-    let source = "reduce(|acc: String, x: String|{acc+x}, |x:String|{x} -> [\"henry\", \"lenry\", \"!\"], \"\")";
-    let result = run_expect_value!(source, String);
+    let source = "reduce(|acc: Str, x: Str|{acc+x}, |x:Str|{x} -> [\"henry\", \"lenry\", \"!\"], \"\")";
+    let result = run_expect_value!(source, Str);
     assert_eq!(result, "henrylenry!");
 }
 
 #[test]
 fn test_zipmap() {
     let source = "
-    haslen := |s: String, l: Int| { len(s) = l }
+    haslen := |s: Str, l: Int| { len(s) = l }
     zipped := zipmap(haslen, [\"henry\", \"lenry\", \"frenry\"], 5 to 10)
     any(zipped)
     ";
@@ -237,7 +237,7 @@ fn test_zipmap() {
     assert!(result);
 
     let source = "
-    MyType := type { name: String, number: Int }
+    MyType := type { name: Str, number: Int }
     mytypes := @zipmap(MyType, [\"henry\", \"lenry\"], [1, 2])
 
     mytypes(0).name = \"henry\" and mytypes(1).number = 2 

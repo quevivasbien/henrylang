@@ -8,7 +8,7 @@
 - Everything is an expression.
 - Functions are first-class.
 - Types are resolved at compile time.
-- Lazy iterators
+- Iterators are lazy.
 
 ## Planned / in-progress
 
@@ -35,7 +35,7 @@ f(4)
 
 ### Compute a sum in two different ways
 ```
-mysum := |list: Array(Int)| {
+mysum := |list: Arr(Int)| {
     reduce(|acc, x| { acc + x }, list, 0)
 }
 
