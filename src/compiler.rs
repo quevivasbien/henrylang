@@ -7,11 +7,13 @@ use crate::chunk::{Chunk, OpCode};
 use crate::scanner;
 use crate::values::{Closure, Function, HeapValue, Value};
 
+#[derive(Debug)]
 struct Local {
     name: String,
     depth: i32,
 }
 
+#[derive(Debug)]
 struct LocalData {
     locals: Vec<Local>,
     heap_locals: Vec<Local>,
@@ -250,6 +252,7 @@ impl Compiler {
     }
 
     pub fn get_variable(&mut self, name: String, is_heap: bool) -> Result<(), String> {
+        println!("{} {} {:?}", name, is_heap, self.locals);
         let local_idx = self.locals.get_idx(&name, is_heap);
         let res = if let Some(idx) = local_idx {
             self.chunk().write_get_local(idx, is_heap, 0)

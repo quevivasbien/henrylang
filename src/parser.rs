@@ -383,7 +383,21 @@ impl Parser {
             return self.assignment(name);
         }
         // proceed assuming variable is already defined
-        Box::new(ast::Variable::new(name))
+        // check for template params
+        let mut template_params = Vec::new();
+        if self.consume_if_match(TokenType::LSquare) {
+            while !self.consume_if_match(TokenType::RSquare) {
+                match self.type_annotation() {
+                    Ok(expr) => template_params.push(expr),
+                    Err(e) => {
+                        self.error(Some(e));
+                        return Box::new(ast::ErrorExpression{});
+                    }
+                }
+                self.consume_if_match(TokenType::Comma);
+            }
+        }
+        Box::new(ast::Variable::new(name, template_params))
     }
 
     fn unary(&mut self) -> Box<dyn ast::Expression> {

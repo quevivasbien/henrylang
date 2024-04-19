@@ -62,6 +62,11 @@ fn resolve_type(name: &String, origin: *const dyn Expression) -> Result<Type, St
     }
 }
 
+fn truncate_template_types(name: &String) -> &str {
+    // cuts off anything that occurs after [ char
+    name.split_terminator('[').nth(0).unwrap()
+}
+
 #[derive(Debug)]
 pub struct NameAndType {
     name: String,
@@ -116,7 +121,7 @@ impl Expression for ErrorExpression {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct TypeAnnotation {
     typename: String,
     children: Vec<TypeAnnotation>,
@@ -409,6 +414,7 @@ impl Expression for Function {
         inner_compiler.function.arity = self.params.len() as u8 - heap_arity;
         inner_compiler.function.heap_arity = heap_arity;
         inner_compiler.function.return_is_heap = rtype.is_heap();
+        inner_compiler.function.name = format!("{}{:?}", self.name, self.param_types()?);
         
         for param in self.params.iter() {
             if inner_compiler.create_variable(param.name.clone(), &param.get_type()?)?.is_some() {
@@ -595,6 +601,7 @@ impl Expression for Binary {
         self.right.compile(compiler)?;
 
         if self.op == TokenType::RightArrow {
+            // TODO: dynamic dispatch with map and other func ops
             if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
                 match &left_type {
                     Type::Arr(_) => {
@@ -719,6 +726,10 @@ impl Call {
     pub fn new(callee: Box<dyn Expression>, args: Vec<Box<dyn Expression>>) -> Result<Self, String> {
         Ok(Self { callee, args, parent: None })
     }
+
+    fn argtypes(&self) -> Result<Vec<Type>, String> {
+        self.args.iter().map(|e| e.get_type()).collect()
+    }
 }
 
 impl Expression for Call {
@@ -745,6 +756,12 @@ impl Expression for Call {
             e.set_parent(Some(self_ptr))
         }
         self.callee.set_parent(Some(self_ptr));
+
+        // when callee is a Variable, we need to do some special handling so the Variable knows what function signature to use, if it is a function
+        let argtypes = self.argtypes();
+        if let Some(var) = self.callee.downcast_mut::<Variable>() {
+            var.set_template_types(argtypes.unwrap()).unwrap();  // TODO: these unwraps need to be handled
+        }
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
         self.parent
@@ -781,18 +798,49 @@ impl Expression for Call {
 #[derive(Debug)]
 pub struct Variable {
     name: String,
+    template_params: Vec<TypeAnnotation>,
+    template_types: Vec<Type>,
     parent: Option<*const dyn Expression>,
 }
 
 impl Variable {
-    pub fn new(name: String) -> Self {
-        Self { name, parent: None }
+    pub fn new(name: String, template_params: Vec<TypeAnnotation>) -> Self {
+        Self { name, template_params, template_types: vec![], parent: None }
+    }
+
+    fn set_template_types(&mut self, template_params: Vec<Type>) -> Result<(), String> {
+        let my_params = self.template_params.iter().map(|a| a.get_type()).collect::<Result<Vec<_>, _>>()?;
+        if !my_params.is_empty() && my_params != template_params {
+            return Err(format!(
+                "Template parameters do not match; expected {:?} but got {:?}",
+                my_params, template_params
+            ))
+        }
+        self.template_types = template_params;
+        Ok(())
+    }
+
+    // get name, appending template types if any
+    fn get_expanded_name(&self) -> Result<String, String> {
+        Ok(if self.template_types.is_empty() {
+            let template_types = self.template_params.iter().map(|a| a.get_type()).collect::<Result<Vec<_>, _>>()?;
+            if template_types.is_empty() {
+                self.name.clone()
+            }
+            else {
+                format!("{}{:?}", self.name, template_types)
+            }
+        }
+        else {
+            format!("{}{:?}", self.name, self.template_types)
+        })
     }
 }
 
 impl Expression for Variable {
     fn get_type(&self) -> Result<Type, String> {
-        resolve_type(&self.name, self)
+        let name = self.get_expanded_name()?;
+        resolve_type(&name, self)
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) {
         self.parent = parent;
@@ -803,7 +851,9 @@ impl Expression for Variable {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let is_heap = self.get_type()?.is_heap();
-        compiler.get_variable(self.name.clone(), is_heap)
+        println!("Compiling variable: {:?}", self);
+        let name = self.get_expanded_name()?;
+        compiler.get_variable(name, is_heap)
     }
 }
 
@@ -817,6 +867,15 @@ pub struct Assignment {
 impl Assignment {
     pub fn new(name: String, value: Box<dyn Expression>) -> Self {
         Self { name, value, parent: None }
+    }
+
+    fn get_expanded_name(&self) -> Result<String, String> {
+        Ok(if let Type::Func(paramtypes, _) = self.value.get_type()? {
+            format!("{}{:?}", self.name, paramtypes)
+        }
+        else {
+            self.name.clone()
+        })
     }
 }
 
@@ -833,7 +892,9 @@ impl Expression for Assignment {
         self.parent
     }
     fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Result<Option<Type>, String> {
-        if &self.name == name {
+        println!("Checking vartype in assignment {:?}, assignment.expanded_name: {:?} name: {:?} upto: {:?}", self, self.get_expanded_name()?, name, upto);
+        let expanded_name = self.get_expanded_name()?;
+        if &expanded_name == name {
             if self.value.as_ref() as *const _ as *const () == upto as *const () {
                 // recursive definition, not allowed except for annotated functions
                 return match self.value.downcast_ref::<Function>() {
@@ -854,12 +915,24 @@ impl Expression for Assignment {
                 return Ok(Some(self.value.get_type()?));
             }
         }
+        else if  &self.name == truncate_template_types(name) {
+            return Err(format!(
+                "Found definition for function variable {}, but a template type is needed to disambiguate. Maybe try {}?",
+                self.name, expanded_name
+            ));
+        }
         Ok(None)
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let typ = self.value.get_type()?;
-        let idx = compiler.create_variable(self.name.clone(), &typ)?;
+        let name = if let Type::Func(paramtypes, _) = &typ {
+            format!("{}{:?}", self.name, paramtypes)
+        }
+        else {
+            self.name.clone()
+        };
+        let idx = compiler.create_variable(name, &typ)?;
         self.value.compile(compiler)?;
         compiler.set_variable(idx, typ.is_heap())
     }
