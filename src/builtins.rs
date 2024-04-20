@@ -188,7 +188,7 @@ pub fn builtin_types() -> FxHashMap<String, Type> {
     map.insert("float[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
     map.insert("int[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
 
-    map.insert("mod".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+    map.insert("mod[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     map.insert("pow[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     map.insert("pow[Float, Float]".to_string(), Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)));
 
@@ -220,7 +220,7 @@ pub fn heap_builtins() -> FxHashMap<String, HeapValue> {
     map.insert("float[Int]".to_string(), HeapValue::NativeFunction(&ITOF));
     map.insert("int[Float]".to_string(), HeapValue::NativeFunction(&FTOI));
 
-    map.insert("mod".to_string(), HeapValue::NativeFunction(&MOD));
+    map.insert("mod[Int, Int]".to_string(), HeapValue::NativeFunction(&MOD));
     map.insert("pow[Int, Int]".to_string(), HeapValue::NativeFunction(&POWI));
     map.insert("pow[Float, Float]".to_string(), HeapValue::NativeFunction(&POWF));
 

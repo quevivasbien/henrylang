@@ -47,7 +47,7 @@ fn test_euler() {
             1
         }
         else {
-            prodi(1 to x)
+            prod(1 to x)
         }
     }
     
@@ -56,7 +56,7 @@ fn test_euler() {
             1.0
         }
         else {
-            1.0 / itof(factorial(n)) + approx_e(n-1)
+            1.0 / floatq(factorial(n)) + approx_e(n-1)
         }
     }
     
@@ -93,14 +93,14 @@ fn test_closure() {
         a := x
         g := || {
             add_a := |z: Int| { a + z }
-            add_a
+            add_a[Int]
         }
         add_a := g()
     
         add_a(2)
     }
     
-    sumi(f -> 0 to 3)
+    sum(f -> 0 to 3)
     ";
 
     let result = run_expect_value!(source, Int);
@@ -110,7 +110,7 @@ fn test_closure() {
     f := |x: Int| { x + 1 }
     g := |s: Str, f: Func(Int, Int)| { f(len(s)) }
 
-    g(\"hello\", f)
+    g(\"hello\", f[Int])
     ";
 
     let result = run_expect_value!(source, Int);
@@ -179,7 +179,7 @@ fn test_maybe() {
     }
     
     zeros_if_negative := |x:Maybe(Int)|{unwrap(x, 0)} -> (null_if_negative -> -4 to 4)
-    sumi(zeros_if_negative)
+    sum(zeros_if_negative)
     ";
 
     let result = run_expect_value!(source, Int);

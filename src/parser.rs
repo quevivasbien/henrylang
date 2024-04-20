@@ -529,6 +529,10 @@ impl Parser {
     }
 
     fn function_def(&mut self) -> Box<dyn ast::Expression> {
+        let name = match &self.last_name {
+            Some(name) => name.clone(),
+            None => "<anon>".to_string()
+        };
         // read parameter list
         let mut params = Vec::new();
         while !self.consume_if_match(TokenType::Pipe) && !self.is_eof() {
@@ -576,10 +580,6 @@ impl Parser {
         };
         self.consume(TokenType::LBrace, "Expected '{' after function parameters.".to_string());
         let body = self.block();
-        let name = match &self.last_name {
-            Some(name) => name.clone(),
-            None => "<anon>".to_string()
-        };
         Box::new(ast::Function::new(name, params, return_type, body))
     }
 
@@ -620,6 +620,10 @@ impl Parser {
     }
 
     fn type_def(&mut self) -> Box<dyn ast::Expression> {
+        let name = match &self.last_name {
+            Some(name) => name.clone(),
+            None => "<anontype>".to_string(),
+        };
         self.consume(TokenType::LBrace, "Expected '{' after 'type'.".to_string());
         let mut fields = Vec::new();
         while !self.consume_if_match(TokenType::RBrace) && !self.is_eof() {
@@ -651,10 +655,6 @@ impl Parser {
             }
             self.consume_if_match(TokenType::Comma);
         }
-        let name = match &self.last_name {
-            Some(name) => name.clone(),
-            None => "<anontype>".to_string(),
-        };
         Box::new(ast::TypeDef::new(name, fields))
     }
 
@@ -877,8 +877,13 @@ impl Parser {
     fn parse(&mut self, typecontext: TypeContext) -> Box<dyn ast::Expression> {
         let block = self.block();
         let mut top_level = Box::new(ast::ASTTopLevel::new(typecontext, block));
-        top_level.set_parent(None);
-        top_level
+        match top_level.set_parent(None) {
+            Ok(()) => top_level,
+            Err(e) => {
+                self.error(Some(e));
+                Box::new(ast::ErrorExpression{})
+            }
+        }
     }
 }
 
