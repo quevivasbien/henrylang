@@ -575,15 +575,6 @@ impl Expression for Binary {
             | TokenType::GT
             | TokenType::LT => Ok(Type::Bool),
             TokenType::To => Ok(Type::Iter(Box::new(Type::Int))),
-            TokenType::RightArrow => {
-                let left_type = self.left.get_type()?;
-                match left_type {
-                    Type::Func(_, typ) => Ok(Type::Iter(Box::new(*typ))),
-                    Type::Arr(typ) => Ok(Type::Iter(Box::new(*typ))),
-                    Type::Str => Ok(Type::Iter(Box::new(Type::Str))),
-                    typ => Err(format!("Cannot use '->' on type {:?}", typ))
-                }
-            }
             _ => self.left.get_type(),
         }
     }
@@ -602,43 +593,14 @@ impl Expression for Binary {
         let left_type = self.left.get_type()?;
         let right_type = self.right.get_type()?;
 
-        self.left.compile(compiler)?;
-        self.right.compile(compiler)?;
-
-        if self.op == TokenType::RightArrow {
-            // TODO: dynamic dispatch with map and other func ops
-            if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
-                match &left_type {
-                    Type::Arr(_) => {
-                        if arr_type.as_ref() != &Type::Int {
-                            return Err(format!(
-                                "Cannot map from type {:?} using non-integer type {:?}",
-                                left_type, arr_type
-                            ));
-                        }
-                    },
-                    Type::Func(arg_type, _) => {
-                        if arg_type.len() != 1 {
-                            return Err(format!("Cannot map with a function does not have a single argument; got a function with {} arguments", arg_type.len()));
-                        }
-                        if &arg_type[0] != arr_type.as_ref() {
-                            return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
-                        }
-                    },
-                    typ => return Err(format!("Cannot map with non-callable type {:?}", typ)),
-                }
-                compiler.write_opcode(OpCode::Map);
-                return Ok(());
-            }
-            return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
-        }
-
         if left_type != right_type {
             return Err(format!(
                 "Operands for operator {:?} must be of the same type; got {:?} and {:?}",
                 self.op, left_type, right_type
             ));
         }
+        self.left.compile(compiler)?;
+        self.right.compile(compiler)?;
 
         match left_type {
             Type::Int => {
@@ -765,7 +727,11 @@ impl Expression for Call {
         // when callee is a Variable, we need to do some special handling so the Variable knows what function signature to use, if it is a function
         let argtypes = self.argtypes();
         if let Some(var) = self.callee.downcast_mut::<Variable>() {
-            var.set_template_types(argtypes?)?;
+            // try and figure out if the variable refers to a function
+            let vtype = var.get_type();
+            if matches!(vtype, Ok(Type::Func(_, _)) | Err(_)) {
+                var.set_template_types(argtypes?)?;
+            }
         }
         Ok(())
     }
@@ -845,9 +811,7 @@ impl Variable {
 
 impl Expression for Variable {
     fn get_type(&self) -> Result<Type, String> {
-        println!("Getting name for variable {}", self.name);
         let name = self.get_expanded_name()?;
-        println!("Variable expanded name is {}", name);
         resolve_type(&name, self)
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
@@ -860,7 +824,6 @@ impl Expression for Variable {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let is_heap = self.get_type()?.is_heap();
-        println!("Compiling variable: {:?}", self);
         let name = self.get_expanded_name()?;
         compiler.get_variable(name, is_heap)
     }
@@ -876,15 +839,6 @@ pub struct Assignment {
 impl Assignment {
     pub fn new(name: String, value: Box<dyn Expression>) -> Self {
         Self { name, value, parent: None }
-    }
-
-    fn get_expanded_name(&self) -> Result<String, String> {
-        Ok(if let Type::Func(paramtypes, _) = self.value.get_type()? {
-            format!("{}{:?}", self.name, paramtypes)
-        }
-        else {
-            self.name.clone()
-        })
     }
 
     fn handle_recursive_def(&self) -> Result<Type, String> {
@@ -918,8 +872,6 @@ impl Expression for Assignment {
         self.parent
     }
     fn find_vartype(&self, name: &String, upto: *const dyn Expression) -> Result<Option<Type>, String> {
-        // println!("Checking vartype in assignment {:?}", self);
-        // println!("assignment.expanded_name: {:?} name: {:?} upto: {:?}", self.get_expanded_name()?, name, upto);
         let name_truncated = truncate_template_types(name);
         let no_template = name_truncated == name;
         if no_template {
@@ -950,7 +902,7 @@ impl Expression for Assignment {
         };
         let argtypes = match &ftype {
             Type::Func(argtypes, _) => argtypes,
-            _ => unreachable!("Expected a function when resolving assignment, but got: {:?}", ftype),
+            _ => unreachable!("Expected function type"),
         };
         let expanded_name = format!("{}{:?}", self.name, argtypes);
         if &expanded_name == name {
@@ -961,16 +913,15 @@ impl Expression for Assignment {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let typ = self.value.get_type()?;
-        let name = if let Type::Func(paramtypes, _) = &typ {
-            if paramtypes.is_empty() {
+        let name = match &typ {
+            Type::Func(paramtypes, _) => if paramtypes.is_empty() {
                 self.name.clone()
             }
             else {
                 format!("{}{:?}", self.name, paramtypes)
-            }
-        }
-        else {
-            self.name.clone()
+            },
+            // Type::Arr(t) => format!("{}[{}]", self.name, t),
+            _ => self.name.clone(),
         };
         let idx = compiler.create_variable(name, &typ)?;
         self.value.compile(compiler)?;
@@ -1374,11 +1325,94 @@ impl Expression for Unwrap {
 
 
 #[derive(Debug)]
+pub struct Map {
+    left: Box<dyn Expression>,
+    right: Box<dyn Expression>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl Map {
+    pub fn new(left: Box<dyn Expression>, right: Box<dyn Expression>) -> Self {
+        Self { left, right, parent: None }
+    }
+}
+
+impl Expression for Map {
+    fn get_type(&self) -> Result<Type, String> {
+        let left_type = self.left.get_type()?;
+        match left_type {
+            Type::Func(_, typ) => Ok(Type::Iter(Box::new(*typ))),
+            Type::Arr(typ) => Ok(Type::Iter(Box::new(*typ))),
+            Type::Str => Ok(Type::Iter(Box::new(Type::Str))),
+            typ => Err(format!("Cannot use '->' on type {:?}", typ))
+        }
+    }
+
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.left.set_parent(Some(self_ptr))?;
+        self.right.set_parent(Some(self_ptr))?;
+
+        // name to do same special handling for left side here that we do for callee in Call expression
+        let rtype = match self.right.get_type()? {
+            Type::Iter(t) | Type::Arr(t) => *t,
+            _ => return Err(format!("Cannot use '->' with type {:?} on right", self.right.get_type()?)),
+        };
+        if let Some(var) = self.left.downcast_mut::<Variable>() {
+            let vtype = var.get_type();
+            if matches!(vtype, Ok(Type::Func(_, _)) | Err(_)) {
+                var.set_template_types(vec![rtype])?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+
+        self.left.compile(compiler)?;
+        self.right.compile(compiler)?;
+
+        if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
+            match &left_type {
+                Type::Arr(_) => {
+                    if arr_type.as_ref() != &Type::Int {
+                        return Err(format!(
+                            "Cannot map from type {:?} using non-integer type {:?}",
+                            left_type, arr_type
+                        ));
+                    }
+                },
+                Type::Func(arg_type, _) => {
+                    if arg_type.len() != 1 {
+                        return Err(format!("Cannot map with a function does not have a single argument; got a function with {} arguments", arg_type.len()));
+                    }
+                    if &arg_type[0] != arr_type.as_ref() {
+                        return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
+                    }
+                },
+                typ => return Err(format!("Cannot map with non-callable type {:?}", typ)),
+            }
+            compiler.write_opcode(OpCode::Map);
+            return Ok(());
+        }
+        return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
+    }
+}
+
+#[derive(Debug)]
 pub struct Reduce {
-    pub function: Box<dyn Expression>,
-    pub array: Box<dyn Expression>,
-    pub init: Box<dyn Expression>,
-    pub parent: Option<*const dyn Expression>,
+    function: Box<dyn Expression>,
+    array: Box<dyn Expression>,
+    init: Box<dyn Expression>,
+    parent: Option<*const dyn Expression>,
 }
 
 impl Reduce {
@@ -1426,6 +1460,16 @@ impl Expression for Reduce {
         self.function.set_parent(Some(self_ptr))?;
         self.array.set_parent(Some(self_ptr))?;
         self.init.set_parent(Some(self_ptr))?;
+
+        // name to do same special handling for function that we do for callee in Call expression
+        let inittype = self.init.get_type()?;
+        let arrtype = match self.array.get_type()? {
+            Type::Arr(t) | Type::Iter(t) => *t,
+            _ => return Err(format!("Cannot use '->' with type {:?} on right", self.array.get_type()?)),
+        };
+        if let Some(var) = self.function.downcast_mut::<Variable>() {
+            var.set_template_types(vec![inittype, arrtype])?;
+        }
         Ok(())
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -1491,6 +1535,15 @@ impl Expression for Filter {
         let self_ptr = self as *const dyn Expression;
         self.function.set_parent(Some(self_ptr))?;
         self.array.set_parent(Some(self_ptr))?;
+
+        // name to do same special handling for function that we do for callee in Call expression
+        let arrtype = match self.array.get_type()? {
+            Type::Arr(t) | Type::Iter(t) => *t,
+            _ => return Err(format!("Cannot use '->' with type {:?} on right", self.array.get_type()?)),
+        };
+        if let Some(var) = self.function.downcast_mut::<Variable>() {
+            var.set_template_types(vec![arrtype])?;
+        }
         Ok(())
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
@@ -1587,6 +1640,19 @@ impl Expression for ZipMap {
         self.function.set_parent(Some(self_ptr))?;
         for expr in self.exprs.iter_mut() {
             expr.set_parent(Some(self_ptr))?;
+        }
+
+        // name to do same special handling for function that we do for callee in Call expression
+        let argtypes = self.exprs.iter()
+            .map(|expr| {
+                match expr.get_type() {
+                    Ok(Type::Arr(t) | Type::Iter(t)) => Ok(*t),
+                    t => Err(format!("Cannot use zipmap with type {:?}", t)),
+                }
+            })
+            .collect::<Result<Vec<Type>, String>>()?;
+        if let Some(var) = self.function.downcast_mut::<Variable>() {
+            var.set_template_types(argtypes)?;
         }
         Ok(())
     }

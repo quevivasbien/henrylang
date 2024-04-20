@@ -188,7 +188,7 @@ lazy_static! {
 
         map.insert(
             TokenType::RightArrow,
-            ParseRule::new(None, Some(Parser::binary), Precedence::Assignment),
+            ParseRule::new(None, Some(Parser::map), Precedence::Assignment),
         );
 
         // identifiers
@@ -743,6 +743,20 @@ impl Parser {
         };
         self.consume(TokenType::RParen, "Expected ')' after 'some' argument.".to_string());
         Box::new(ast::Maybe::new_some(expr))
+    }
+
+    fn map(&mut self, left: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {
+        let token = self.previous_token().clone();
+        let right = match self.parse_with_precedence(Precedence::Assignment) {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected something that could follow '{}', but couldn't find anything.", token.text)
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        Box::new(ast::Map::new(left, right))
     }
 
     fn reduce(&mut self) -> Box<dyn ast::Expression> {

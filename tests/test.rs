@@ -56,7 +56,7 @@ fn test_euler() {
             1.0
         }
         else {
-            1.0 / floatq(factorial(n)) + approx_e(n-1)
+            1.0 / float(factorial(n)) + approx_e(n-1)
         }
     }
     
@@ -189,12 +189,12 @@ fn test_maybe() {
 #[test]
 fn test_reduce() {
     let source = "
-    sum := |arr: Iter(Int)| {
+    mysum := |arr: Iter(Int)| {
         reduce(|acc: Int, x: Int| {acc + x}, arr, 0)
     }
     
-    n := powi(2, 8)
-    sum(0 to n) = sumi(0 to n)
+    n := pow(2, 8)
+    mysum(0 to n) = sum(0 to n)
     ";
     let result = run_expect_value!(source, Bool);
     assert!(result);
