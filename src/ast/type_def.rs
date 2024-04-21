@@ -29,7 +29,7 @@ impl Expression for TypeDef {
     fn get_type(&self) -> Result<Type, String> {
         let field_types = self.field_types()?;
         let types_only = field_types.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>();
-        Ok(Type::Func(
+        Ok(Type::TypeDef(
             types_only,
             Box::new(Type::Object(self.name.clone(), field_types))
         ))

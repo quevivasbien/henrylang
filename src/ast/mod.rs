@@ -47,12 +47,13 @@ pub enum Type {
     Iter(Box<Type>),
     Maybe(Box<Type>),
     Func(Vec<Type>, Box<Type>),
+    TypeDef(Vec<Type>, Box<Type>),
     Object(String, Vec<(String, Type)>)
 }
 
 impl Type {
     pub fn is_heap(&self) -> bool {
-        matches!(self, Self::Str | Self::Arr(_) | Self::Iter(_) | Self::Maybe(_) | Self::Func(_, _) | Self::Object(_, _))
+        matches!(self, Self::Str | Self::Arr(_) | Self::Iter(_) | Self::Maybe(_) | Self::Func(..) | Self::TypeDef(..) | Self::Object(..))
     }
 }
 

@@ -240,7 +240,7 @@ fn test_zipmap() {
     MyType := type { name: Str, number: Int }
     mytypes := @zipmap(MyType, [\"henry\", \"lenry\"], [1, 2])
 
-    mytypes(0).name = \"henry\" and mytypes(1).number = 2 
+    mytypes(0).name = \"henry\" and mytypes(1).number = 2
     ";
     let result = run_expect_value!(source, Bool);
     assert!(result);

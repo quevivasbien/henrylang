@@ -26,6 +26,7 @@ impl Expression for Call {
                 Ok(*return_type)
             },
             Ok(Type::Arr(typ)) => Ok(*typ),
+            Ok(Type::TypeDef(_, typ)) => Ok(*typ),
             Ok(ctype) => {
                 Err(format!(
                     "Tried to call an expression of type {:?}, which is not callable", ctype
@@ -49,8 +50,12 @@ impl Expression for Call {
         if let Some(var) = self.callee.downcast_mut::<Variable>() {
             // try and figure out if the variable refers to a function
             let vtype = var.get_type();
-            if matches!(vtype, Ok(Type::Func(_, _)) | Err(_)) {
-                var.set_template_types(argtypes?)?;
+            match vtype {
+                Ok(Type::TypeDef(..)) => (),
+                Ok(Type::Func(..)) | Err(_) => {
+                    var.set_template_types(argtypes?)?;
+                },
+                _ => (),
             }
         }
         Ok(())
@@ -61,9 +66,10 @@ impl Expression for Call {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let callee_type = self.callee.get_type()?;
-        let (paramtypes, _return_type) = match callee_type {
-            Type::Func(argtypes, return_type) => (argtypes, *return_type),
-            Type::Arr(typ) => (vec![Type::Int], *typ),
+        let paramtypes = match callee_type {
+            Type::Func(argtypes, _) => argtypes,
+            Type::Arr(_) => vec![Type::Int],
+            Type::TypeDef(argtypes, _) => argtypes,
             _ => return Err(format!(
                 "Cannot call an expression of type {:?}", callee_type
             )),

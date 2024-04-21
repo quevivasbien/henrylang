@@ -76,7 +76,7 @@ impl Expression for Map {
                         return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
                     }
                 },
-                typ => return Err(format!("Cannot map with non-callable type {:?}", typ)),
+                typ => return Err(format!("Cannot map with type {:?}", typ)),
             }
             compiler.write_opcode(OpCode::Map);
             return Ok(());
@@ -255,9 +255,9 @@ impl ZipMap {
 impl Expression for ZipMap {
     fn get_type(&self) -> Result<Type, String> {
         let (func_arg_types, func_ret_type) = match self.function.get_type()? {
-            Type::Func(arg, ret) => (arg, *ret),
+            Type::Func(arg, ret) | Type::TypeDef(arg, ret) => (arg, *ret),
             x => return Err(format!(
-                "ZipMap function must be a function; got a {:?}", x
+                "ZipMap function must be a function or type definition; got a {:?}", x
             ))
         };
         let mut expr_types = Vec::new();
@@ -294,7 +294,10 @@ impl Expression for ZipMap {
             })
             .collect::<Result<Vec<Type>, String>>()?;
         if let Some(var) = self.function.downcast_mut::<Variable>() {
-            var.set_template_types(argtypes)?;
+            let vartype = var.get_type();
+            if !matches!(vartype, Ok(Type::TypeDef(..))) {
+                var.set_template_types(argtypes)?;
+            }
         }
         Ok(())
     }

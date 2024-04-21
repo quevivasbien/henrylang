@@ -19,7 +19,7 @@ impl TypeAnnotation {
         };
         let typ = resolve_type(&self.typename, parent)?;
         let objtype = match typ {
-            Type::Func(_, t) => *t,
+            Type::TypeDef(_, t) => *t,
             _ => return Err(format!("When resolving type, expected an Object definition, but got {:?}", typ)),
         };
         if let Type::Object(n, _) = &objtype {
