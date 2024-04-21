@@ -50,13 +50,13 @@ impl Expression for Function {
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
-        self.block.set_parent(Some(self_ptr))?;
         if let Some(rtype) = &mut self.rtype {
             rtype.set_parent(Some(self_ptr))?;
         }
         for param in self.params.iter_mut() {
             param.typ.set_parent(Some(self_ptr))?;
         }
+        self.block.set_parent(Some(self_ptr))?;
         Ok(())
     }
     fn get_parent(&self) -> Option<*const dyn Expression> {
