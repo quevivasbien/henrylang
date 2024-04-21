@@ -372,8 +372,7 @@ impl Chunk {
                 println!("{:04} SetLocal {}", ip0, idx);
             },
             OpCode::SetHeapLocal => {
-                let idx = self.read_u16(ip);
-                println!("{:04} SetHeapLocal {}", ip0, idx);
+                println!("{:04} SetHeapLocal", ip0);
             },
             OpCode::GetLocal => {
                 let idx = self.read_u16(ip);

@@ -20,7 +20,7 @@ fn approx_e() -> f64 {
             1
         }
         else {
-            prodi(1 to x)
+            prod(1 to x)
         }
     }
     
@@ -29,11 +29,11 @@ fn approx_e() -> f64 {
             1.0
         }
         else {
-            1.0 / itof(factorial(n)) + approx_e(n-1)
+            1.0 / float(factorial(n)) + approx_e(n-1)
         }
     }
     
-    approx_e(100)
+    approx_e(20)
     ";
     run_expect_value!(source, Float)
 }
@@ -46,8 +46,8 @@ fn arcsin() -> f64 {
                 x
             }
             else {
-                prodf(|x:Int|{itof(x)/itof(x+1)} -> filter(|x:Int|{mod(x, 2)=1}, 1 to (2*n)))
-                    * powf(x, itof(n*2+1)) / itof(n*2+1)
+                prod(|x:Int|{float(x)/float(x+1)} -> filter(|x:Int|{mod(x, 2)=1}, 1 to (2*n)))
+                    * pow(x, float(n*2+1)) / float(n*2+1)
                     + iter(n-1)
             }
         }
@@ -60,7 +60,8 @@ fn arcsin() -> f64 {
 }
 
 fn fibonacci() -> i64 {
-    let source = "fib_helper := |n: Int, x: Int, y: Int|: Int {
+    let source = "
+    fib_helper := |n: Int, x: Int, y: Int|: Int {
         z := x + y
         if n = 1 {
             z
@@ -90,13 +91,13 @@ fn sum_primes() -> i64 {
     is_prime := |n: Int| {
         if n = 2 { true }
         else {
-            sqrt_n := ftoi(powf(itof(n), 0.5)) + 1
+            sqrt_n := int(pow(float(n), 0.5)) + 1
             all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
         }
     }
     
     primes := filter(is_prime, 2 to 10000)
-    sumi(primes)
+    sum(primes)
     ";
     run_expect_value!(source, Int)
 }
