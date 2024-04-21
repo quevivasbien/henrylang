@@ -964,23 +964,21 @@ fn unpack_heapvalue(hvalue: HeapValue, return_type: &ast::Type) -> Result<Tagged
             Ok(TaggedValue::TypeDef(t))
         },
         (HeapValue::Object(obj), ast::Type::Object(name, fields)) => {
-            let heap_fields = fields.iter().filter(|(_, v)| {
+            let heap_fields = FxHashMap::from_iter(fields.iter().filter(|(_, v)| {
                 v.is_heap()
-            }).map(|(_, v)| {
-                v.clone()
-            });
-            let nonheap_fields = fields.iter().filter(|(_, v)| {
+            }).cloned());
+            let nonheap_fields = FxHashMap::from_iter(fields.iter().filter(|(_, v)| {
                 !v.is_heap()
-            }).map(|(_, v)| {
-                v.clone()
-            });
+            }).cloned());
             let mut fields = FxHashMap::default();
-            for ((n, v), t) in obj.fields.iter().zip(nonheap_fields) {
-                let x = TaggedValue::from_value(*v, &t)?;
+            for (n, v) in obj.fields.iter() {
+                let t = nonheap_fields.get(n).unwrap();
+                let x = TaggedValue::from_value(*v, t)?;
                 fields.insert(n.clone(), x);
             }
-            for ((n, v), t) in obj.heap_fields.iter().zip(heap_fields) {
-                let x = unpack_heapvalue(v.clone(), &t)?;
+            for (n, v) in obj.heap_fields.iter() {
+                let t = heap_fields.get(n).unwrap();
+                let x = unpack_heapvalue(v.clone(), t)?;
                 fields.insert(n.clone(), x);
             }
 

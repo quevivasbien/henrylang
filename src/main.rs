@@ -1,24 +1,39 @@
 use std::env;
-use stdio::Write;
+use rustyline::{error::ReadlineError, DefaultEditor};
 
 use henrylang::*;
 
 fn repl(vm: &mut VM) {
-    println!("[ henrylang v0.3.2 ]");
+    let mut rl = DefaultEditor::new().unwrap();
+    let _ = rl.load_history(".henrylang_history");
+    rl.bind_sequence(rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE), rustyline::Cmd::HistorySearchForward);
+    println!("[ henrylang v0.3.3 ]");
     loop {
-        print!("> ");
-        // read user input
-        let mut user_input = String::new();
-        let _ = std::io::stdout().flush();
-        std::io::stdin().read_line(&mut user_input).unwrap();
-        if user_input == "exit\n" {
-            break;
-        }
-        match vm.interpret(user_input) {
-            Ok(x) => println!("{}", x),
-            Err(e) => println!("{}", e),
+        let readline = rl.readline("\x1b[1mhenry>\x1b[0m ");
+        match readline {
+            Ok(line) => {
+                if line == "exit" {
+                    break;
+                }
+                rl.add_history_entry(line.as_str()).unwrap();
+                match vm.interpret(line) {
+                    Ok(x) => println!("{}", x),
+                    Err(e) => println!("{}", e),
+                }
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("Cancelled");
+            },
+            Err(ReadlineError::Eof) => {
+                break;
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
         }
     }
+    rl.save_history(".henrylang_history").unwrap();
 }
 
 fn run_file(vm: &mut VM, path: &str) {
