@@ -183,23 +183,23 @@ lazy_static! {
 
 pub fn builtin_types() -> FxHashMap<String, Type> {
     let mut map = FxHashMap::default();
-    map.insert("print".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
+    map.insert("print[Str]".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
     map.insert("time".to_string(), Type::Func(vec![], Box::new(Type::Int)));
-    map.insert("itof".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
-    map.insert("ftoi".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
+    map.insert("float[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
+    map.insert("int[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
 
-    map.insert("mod".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
-    map.insert("powi".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
-    map.insert("powf".to_string(), Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)));
+    map.insert("mod[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+    map.insert("pow[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+    map.insert("pow[Float, Float]".to_string(), Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)));
 
-    map.insert("sumi".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
-    map.insert("prodi".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("sum[Iter(Int)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
+    map.insert("prod[Iter(Int)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
 
-    map.insert("sumf".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
-    map.insert("prodf".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("sum[Iter(Float)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
+    map.insert("prod[Iter(Float)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Float))], Box::new(Type::Float)));
 
-    map.insert("all".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
-    map.insert("any".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("all[Iter(Bool)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
+    map.insert("any[Iter(Bool)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
     
     map.insert("E".to_string(), Type::Float);
 
@@ -215,23 +215,23 @@ pub fn builtins() -> FxHashMap<String, Value> {
 
 pub fn heap_builtins() -> FxHashMap<String, HeapValue> {
     let mut map = FxHashMap::default();
-    map.insert("print".to_string(), HeapValue::NativeFunction(&PRINT));
+    map.insert("print[Str]".to_string(), HeapValue::NativeFunction(&PRINT));
     map.insert("time".to_string(), HeapValue::NativeFunction(&TIME));
-    map.insert("itof".to_string(), HeapValue::NativeFunction(&ITOF));
-    map.insert("ftoi".to_string(), HeapValue::NativeFunction(&FTOI));
+    map.insert("float[Int]".to_string(), HeapValue::NativeFunction(&ITOF));
+    map.insert("int[Float]".to_string(), HeapValue::NativeFunction(&FTOI));
 
-    map.insert("mod".to_string(), HeapValue::NativeFunction(&MOD));
-    map.insert("powi".to_string(), HeapValue::NativeFunction(&POWI));
-    map.insert("powf".to_string(), HeapValue::NativeFunction(&POWF));
+    map.insert("mod[Int, Int]".to_string(), HeapValue::NativeFunction(&MOD));
+    map.insert("pow[Int, Int]".to_string(), HeapValue::NativeFunction(&POWI));
+    map.insert("pow[Float, Float]".to_string(), HeapValue::NativeFunction(&POWF));
 
-    map.insert("sumi".to_string(), HeapValue::NativeFunction(&SUMI));
-    map.insert("prodi".to_string(), HeapValue::NativeFunction(&PRODI));
+    map.insert("sum[Iter(Int)]".to_string(), HeapValue::NativeFunction(&SUMI));
+    map.insert("prod[Iter(Int)]".to_string(), HeapValue::NativeFunction(&PRODI));
 
-    map.insert("sumf".to_string(), HeapValue::NativeFunction(&SUMF));
-    map.insert("prodf".to_string(), HeapValue::NativeFunction(&PRODF));
+    map.insert("sum[Iter(Float)]".to_string(), HeapValue::NativeFunction(&SUMF));
+    map.insert("prod[Iter(Float)]".to_string(), HeapValue::NativeFunction(&PRODF));
 
-    map.insert("all".to_string(), HeapValue::NativeFunction(&ALL));
-    map.insert("any".to_string(), HeapValue::NativeFunction(&ANY));
+    map.insert("all[Iter(Bool)]".to_string(), HeapValue::NativeFunction(&ALL));
+    map.insert("any[Iter(Bool)]".to_string(), HeapValue::NativeFunction(&ANY));
 
     map
 }

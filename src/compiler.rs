@@ -7,11 +7,13 @@ use crate::chunk::{Chunk, OpCode};
 use crate::scanner;
 use crate::values::{Closure, Function, HeapValue, Value};
 
+#[derive(Debug)]
 struct Local {
     name: String,
     depth: i32,
 }
 
+#[derive(Debug)]
 struct LocalData {
     locals: Vec<Local>,
     heap_locals: Vec<Local>,

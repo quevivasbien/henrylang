@@ -606,7 +606,7 @@ impl VM {
                     };
                     match self.globals.get(name.as_ref()) {
                         Some(x) => self.stack.push(*x),
-                        None => unreachable!("Attempted to get global that does not exist"),
+                        None => unreachable!("Attempted to get global {} that does not exist", name),
                     };
                 },
                 OpCode::GetHeapGlobal => {
@@ -616,7 +616,7 @@ impl VM {
                     };
                     match self.heap_globals.get(name.as_ref()) {
                         Some(x) => self.heap_stack.push(x.clone()),
-                        None => unreachable!("Attempted to get global that does not exist"),
+                        None => unreachable!("Attempted to get global {} that does not exist", name),
                     };
                 }
                 OpCode::SetLocal => {
