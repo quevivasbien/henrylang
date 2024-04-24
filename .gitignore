@@ -2,6 +2,7 @@ __pycache__
 /.vscode
 
 test.hl
+.henrylang_history
 
 # Added by cargo
 

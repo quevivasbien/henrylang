@@ -62,10 +62,14 @@ impl Expression for Block {
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
-        // todo: handle blocks and scope properly
-        for e in self.expressions.iter() {
+        wasmizer.begin_scope(&self.get_type()?)?;
+        for (i, e) in self.expressions.iter().enumerate() {
             e.wasmize(wasmizer)?;
+            if i < self.expressions.len() - 1 {
+                wasmizer.write_drop();
+            }
         }
+        wasmizer.end_scope();
         Ok(())
     }
 }

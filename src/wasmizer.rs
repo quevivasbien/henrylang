@@ -24,9 +24,12 @@ enum ExportType {
 }
 
 enum Opcode {
+    Block = 0x02,
     End = 0x0b,
     Call = 0x10,
+    Drop = 0x1a,
     LocalGet = 0x20,
+    LocalTee = 0x22,
     I32Const = 0x41,
     I32Add = 0x6a,
     I32Sub = 0x6b,
@@ -77,12 +80,12 @@ fn section_from_chunks(section_type: SectionType, chunks: &[Vec<u8>]) -> Vec<u8>
     result
 }
 
-fn section_from_values(section_type: SectionType, values: &[u8]) -> Vec<u8> {
+fn section_from_values(section_type: SectionType, values: &[u32]) -> Vec<u8> {
     let mut result = vec![section_type as u8];
-    let data = [
-        unsigned_leb128(values.len() as u32).as_slice(),
-        values
-    ].concat();
+    let mut data = unsigned_leb128(values.len() as u32);
+    for value in values {
+        data.append(&mut unsigned_leb128(*value));
+    }
     result.append(&mut vector(data));
     result
 }
@@ -96,8 +99,12 @@ fn function_type(args: Vec<u8>, ret: Vec<u8>) -> Vec<u8> {
     result
 }
 
-fn function_body(n_locals: u8, mut code: Vec<u8>) -> Vec<u8> {
-    let mut result = vec![n_locals];
+fn function_body(local_types: Vec<u8>, mut code: Vec<u8>) -> Vec<u8> {
+    let mut result = unsigned_leb128(local_types.len() as u32);
+    for ltype in local_types {
+        result.push(0x01);  // count of locals with this type
+        result.push(ltype);
+    }
     result.append(&mut code);
     vector(result)
 }
@@ -115,9 +122,6 @@ impl Default for FuncTypeSignature {
 }
 
 impl FuncTypeSignature {
-    fn new(args: Vec<Numtype>, ret: Numtype) -> Self {
-        Self { args, ret }
-    }
     // get byte representation
     fn as_functype(&self) -> Vec<u8> {
         function_type(
@@ -131,18 +135,18 @@ impl FuncTypeSignature {
 struct Export {
     name: String,
     // index of function within funcs
-    func_idx: u8,
+    func_idx: u32,
 }
 
 impl Export {
-    fn new(name: String, func_idx: u8) -> Self {
+    fn new(name: String, func_idx: u32) -> Self {
         Self { name, func_idx }
     }
 
     fn as_export(&self) -> Vec<u8> {
         let mut result = encode_string(&self.name);
         result.push(ExportType::Func as u8);
-        result.push(self.func_idx);
+        result.append(&mut unsigned_leb128(self.func_idx));
         result
     }
 }
@@ -151,7 +155,7 @@ struct ModuleBuilder {
     // stores type signatures for each function
     functypes: Vec<FuncTypeSignature>,
     // indices to functypes for each function
-    funcs: Vec<u8>,
+    funcs: Vec<u32>,
     // bytecode for each function's body - order should match that of funcs
     func_bodies: Vec<Vec<u8>>,
     // information about functions to export
@@ -170,22 +174,22 @@ impl Default for ModuleBuilder {
 }
 
 impl ModuleBuilder {
-    fn add_function(&mut self, sig: &FuncTypeSignature, n_locals: u8, code: Vec<u8>, export_name: Option<String>) -> Result<(), String> {
+    fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<(), String> {
         let ftype = match self.functypes.iter().enumerate()
             .find_map(|(i, x)| if x == sig { Some(i) } else { None })
         {
-            Some(i) => i as u8,
+            Some(i) => i as u32,
             None => {
                 self.functypes.push(sig.clone());
-                self.functypes.len() as u8 - 1
+                self.functypes.len() as u32 - 1
             }
         };
-        let func_idx = self.funcs.len() as u8;
-        if func_idx == u8::MAX {
+        let func_idx = self.funcs.len() as u32;
+        if func_idx == u32::MAX {
             return Err(format!("too many functions"));
         }
         self.funcs.push(ftype);
-        self.func_bodies.push(function_body(n_locals, code));
+        self.func_bodies.push(function_body(local_types, code));
         if let Some(name) = export_name {
             self.exports.push(Export::new(name, func_idx));
         }
@@ -246,28 +250,86 @@ impl ModuleBuilder {
     }
 }
 
-struct WasmFuncCode {
+#[derive(Debug)]
+struct Local {
+    name: String,
+    index: u32,
+    depth: i32,
+}
+
+#[derive(Debug)]
+struct LocalData {
+    locals: Vec<Local>,
+    types: Vec<u8>,
+    scope_depth: i32,
+}
+
+impl Default for LocalData {
+    fn default() -> Self {
+        Self {
+            locals: Vec::new(),
+            types: Vec::new(),
+            scope_depth: -1,
+        }
+    }
+}
+
+impl LocalData {
+    fn add_local(&mut self, name: String, typ: u8) -> u32 {
+        let index = self.locals.len() as u32;
+        self.locals.push(Local { name, index, depth: self.scope_depth });
+        self.types.push(typ);
+        index
+    }
+    fn get_idx(&self, name: &str) -> Option<u32> {
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if local.name == name {
+                return Some(i as u32);
+            }
+        }
+        None
+    }
+}
+
+struct WasmFunc {
     name: String,
     signature: FuncTypeSignature,
+    locals: LocalData,
     bytes: Vec<u8>,
     export: bool,
 }
 
-impl WasmFuncCode {
+impl WasmFunc {
     fn new(name: String, export: bool) -> Self {
-        Self { name, signature: Default::default(), bytes: vec![], export }
+        Self { name, signature: Default::default(), locals: Default::default(), bytes: vec![], export }
+    }
+    fn n_params(&self) -> u32 {
+        self.signature.args.len() as u32
     }
 }
 
 pub struct Wasmizer {
     pub typecontext: TypeContext,
     builder: ModuleBuilder,
-    current_func: WasmFuncCode,
+    current_func: WasmFunc,
 }
 
 impl Wasmizer {
     fn new(typecontext: TypeContext) -> Self {
-        Self { typecontext, builder: Default::default(), current_func: WasmFuncCode::new("main".to_string(), true) }
+        Self { typecontext, builder: Default::default(), current_func: WasmFunc::new("main".to_string(), true) }
+    }
+
+    fn locals(&self) -> &LocalData {
+        &self.current_func.locals
+    }
+    fn locals_mut(&mut self) -> &mut LocalData {
+        &mut self.current_func.locals
+    }
+    fn bytes(&self) -> &Vec<u8> {
+        &self.current_func.bytes
+    }
+    fn bytes_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.current_func.bytes
     }
 
     pub fn finish_func(&mut self) {
@@ -278,7 +340,12 @@ impl Wasmizer {
         else {
             None
         };
-        self.builder.add_function(&self.current_func.signature, 0, self.current_func.bytes.clone(), export_name).unwrap();
+        self.builder.add_function(
+            &self.current_func.signature,
+            self.locals().types.clone(),
+            self.bytes().clone(),
+            export_name
+        ).unwrap();
     }
 
     pub fn write_const_i32(&mut self, value: i32) {
@@ -288,7 +355,7 @@ impl Wasmizer {
     pub fn write_add(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
-                self.current_func.bytes.push(Opcode::I32Add as u8);
+                self.bytes_mut().push(Opcode::I32Add as u8);
             },
             _ => {
                 return Err(format!("unsupported type: {:?}", typ));
@@ -299,7 +366,7 @@ impl Wasmizer {
     pub fn write_sub(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
-                self.current_func.bytes.push(Opcode::I32Sub as u8);
+                self.bytes_mut().push(Opcode::I32Sub as u8);
             },
             _ => {
                 return Err(format!("unsupported type: {:?}", typ));
@@ -310,7 +377,7 @@ impl Wasmizer {
     pub fn write_mul(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
-                self.current_func.bytes.push(Opcode::I32Mul as u8);
+                self.bytes_mut().push(Opcode::I32Mul as u8);
             },
             _ => {
                 return Err(format!("unsupported type: {:?}", typ));
@@ -321,13 +388,70 @@ impl Wasmizer {
     pub fn write_div(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
-                self.current_func.bytes.push(Opcode::I32DivS as u8);
+                self.bytes_mut().push(Opcode::I32DivS as u8);
             },
             _ => {
                 return Err(format!("unsupported type: {:?}", typ));
             }
         }
         Ok(())
+    }
+
+    pub fn write_drop(&mut self) {
+        self.bytes_mut().push(Opcode::Drop as u8);
+    }
+
+    pub fn begin_scope(&mut self, typ: &ast::Type) -> Result<(), String> {
+        self.locals_mut().scope_depth += 1;
+        if self.locals().scope_depth > 0 {
+            self.bytes_mut().push(Opcode::Block as u8);
+            self.bytes_mut().push(match typ {
+                ast::Type::Int => Numtype::I32 as u8,
+                _ => return Err(format!("unsupported type: {:?}", typ)),
+            })
+        }
+        Ok(())
+    }
+    pub fn end_scope(&mut self) {
+        if self.locals().scope_depth > 0 {
+            self.bytes_mut().push(Opcode::End as u8);
+        }
+        self.locals_mut().scope_depth -= 1;
+        while let Some(local) = self.locals().locals.last() {
+            if local.depth <= self.locals().scope_depth {
+                break;
+            }
+            self.locals_mut().locals.pop();
+        }
+    }
+
+    pub fn create_variable(&mut self, name: String, typ: &ast::Type) -> Result<u32, String> {
+        // only handle local variables for now
+        // create a local variable
+        let typ = match typ {
+            ast::Type::Int => Numtype::I32 as u8,
+            _ => return Err(format!("unsupported variable type: {:?}", typ)),
+        };
+        Ok(self.locals_mut().add_local(name, typ))
+    }
+    pub fn set_variable(&mut self, idx: u32) {
+        self.bytes_mut().push(Opcode::LocalTee as u8);
+        let idx = idx + self.current_func.n_params();
+        self.bytes_mut().append(&mut unsigned_leb128(idx));
+    }
+    pub fn get_variable(&mut self, name: String) -> Result<(), String> {
+        // can't yet deal with globals or upvalues
+        self.bytes_mut().push(Opcode::LocalGet as u8);
+        let idx = self.locals().get_idx(&name);
+        match idx {
+            Some(idx) => {
+                self.bytes_mut().append(&mut unsigned_leb128(idx));
+                Ok(())
+            },
+            None => {
+                Err(format!("variable {} not found in local scope", name))
+            }
+        }
     }
 
     fn to_bytes(&self) -> Vec<u8> {
@@ -344,5 +468,20 @@ pub fn wasmize(source: String, typecontext: TypeContext) -> Result<(Vec<u8>, ast
     ast.wasmize(&mut wasmizer)?;
     let return_type = ast.get_type()?;
 
-    Ok((wasmizer.to_bytes(), return_type))
+    let bytes = wasmizer.to_bytes();
+    #[cfg(feature = "debug")]
+    {
+        // print out bytes in form similar to xxd -g 1
+        for (i, b) in program.iter().enumerate() {
+            if i % 16 == 0 {
+                print!("{:04x}: ", i);
+            }
+            print!("{:02x} ", b);
+            if i % 16 == 15 || i == program.len() - 1 {
+                println!();
+            }
+        }
+        println!();
+    }
+    Ok((bytes, return_type))
 }

@@ -91,11 +91,27 @@ impl Expression for Assignment {
             else {
                 format!("{}{:?}", self.name, paramtypes)
             },
-            // Type::Arr(t) => format!("{}[{}]", self.name, t),
             _ => self.name.clone(),
         };
         let idx = compiler.create_variable(name, &typ)?;
         self.value.compile(compiler)?;
         compiler.set_variable(idx, typ.is_heap())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        let typ = self.value.get_type()?;
+        let name = match &typ {
+            Type::Func(paramtypes, _) => if paramtypes.is_empty() {
+                self.name.clone()
+            }
+            else {
+                format!("{}{:?}", self.name, paramtypes)
+            },
+            _ => self.name.clone(),
+        };
+        let idx = wasmizer.create_variable(name, &typ)?;
+        self.value.wasmize(wasmizer)?;
+        wasmizer.set_variable(idx);
+        Ok(())
     }
 }

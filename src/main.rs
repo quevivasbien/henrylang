@@ -16,6 +16,7 @@ fn run_wasm(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(unused_variables)]
 fn repl(vm: &mut VM) {
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history(".henrylang_history");
