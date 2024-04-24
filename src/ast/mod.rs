@@ -34,7 +34,7 @@ pub use variable::*;
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::compiler::Compiler;
+use crate::{compiler::Compiler, wasmizer::Wasmizer};
 
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -86,6 +86,10 @@ pub trait Expression: std::fmt::Debug + Downcast {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
+    #[allow(unused_variables)]
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        Err(format!("wasmize not implemented for {}", std::any::type_name::<Self>()))
+    }
 }
 
 impl_downcast!(Expression);

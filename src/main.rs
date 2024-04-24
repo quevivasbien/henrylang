@@ -1,13 +1,26 @@
 use std::env;
+use rustc_hash::FxHashMap;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use henrylang::*;
+
+fn run_wasm(bytes: &[u8]) -> Result<(), String> {
+    let mut store = wasmer::Store::default();
+    let module = wasmer::Module::new(&store, bytes).map_err(|e| format!("{}", e))?;
+    let import_object = wasmer::imports! {};
+    let instance = wasmer::Instance::new(&mut store, &module, &import_object).map_err(|e| format!("{}", e))?;
+
+    let main = instance.exports.get_function("main").map_err(|e| format!("{}", e))?;
+    let result = main.call(&mut store, &[]).map_err(|e| format!("{}", e))?;
+    println!("Result: {:?}", result);
+    Ok(())
+}
 
 fn repl(vm: &mut VM) {
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history(".henrylang_history");
     rl.bind_sequence(rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE), rustyline::Cmd::HistorySearchForward);
-    println!("[ henrylang v0.3.3 ]");
+    println!("\n[ henrylang v0.4.0 ]\n");
     loop {
         let readline = rl.readline("\x1b[1mhenry>\x1b[0m ");
         match readline {
@@ -16,8 +29,16 @@ fn repl(vm: &mut VM) {
                     break;
                 }
                 rl.add_history_entry(line.as_str()).unwrap();
+                #[cfg(not(feature = "wasm"))]
                 match vm.interpret(line) {
                     Ok(x) => println!("{}", x),
+                    Err(e) => println!("{}", e),
+                }
+                #[cfg(feature = "wasm")]
+                match wasmizer::wasmize(line, std::rc::Rc::new(std::cell::RefCell::new(FxHashMap::default()))) {
+                    Ok((bytes, _)) => if let Err(e) = run_wasm(&bytes) {
+                        println!("{}", e);
+                    },
                     Err(e) => println!("{}", e),
                 }
             },

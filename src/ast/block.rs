@@ -60,4 +60,12 @@ impl Expression for Block {
         self.expressions.last().unwrap().compile(compiler)?;
         compiler.end_scope(self.get_type()?.is_heap())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        // todo: handle blocks and scope properly
+        for e in self.expressions.iter() {
+            e.wasmize(wasmizer)?;
+        }
+        Ok(())
+    }
 }

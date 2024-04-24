@@ -83,7 +83,7 @@ impl Expression for TypeAnnotation {
                 }
                 Ok(Type::Maybe(Box::new(child_types[0].clone())))
             },
-            _ => unimplemented!("Unknown type annotation: {}", self.typename)
+            _ => Err(format!("Unknown type annotation: {}", self.typename))
         }
     }
     

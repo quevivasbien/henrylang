@@ -136,4 +136,26 @@ impl Expression for Binary {
         };
         Ok(())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+
+        if left_type != right_type {
+            return Err(format!(
+                "Operands for operator {:?} must be of the same type; got {:?} and {:?}",
+                self.op, left_type, right_type
+            ));
+        }
+
+        self.left.wasmize(wasmizer)?;
+        self.right.wasmize(wasmizer)?;
+        match self.op {
+            TokenType::Plus => wasmizer.write_add(&left_type),
+            TokenType::Minus => wasmizer.write_sub(&left_type),
+            TokenType::Star => wasmizer.write_mul(&left_type),
+            TokenType::Slash => wasmizer.write_div(&left_type),
+            _ => unimplemented!(),
+        }
+    }
 }
