@@ -45,8 +45,8 @@ impl Expression for ASTTopLevel {
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        wasmizer.init_func("main".to_string(), &[], &self.get_type()?, true)?;
         self.child.wasmize(wasmizer)?;
-        wasmizer.finish_func();
-        Ok(())
+        wasmizer.finish_func()
     }
 }

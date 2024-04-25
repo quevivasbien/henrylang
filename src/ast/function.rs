@@ -104,4 +104,22 @@ impl Expression for Function {
 
         compiler.write_function(inner_compiler)
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+        let (ptypes, rtype) = match self.get_type()? {
+            Type::Func(ptypes, rtype) => (ptypes, *rtype),
+            _ => unreachable!(),
+        };
+        let name = format!("{}{:?}", self.name, self.param_types()?);
+        wasmizer.init_func(name, &ptypes, &rtype, false)?;
+        for param in self.params.iter() {
+            wasmizer.add_param_name(param.name.clone());
+        }
+
+        self.block.wasmize(wasmizer)?;
+        wasmizer.finish_func()?;
+
+        wasmizer.write_last_func_index();
+        Ok(())
+    }
 }

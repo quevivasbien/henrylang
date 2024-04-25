@@ -19,6 +19,16 @@ enum Numtype {
     I32 = 0x7f,
 }
 
+impl Numtype {
+    fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
+        match typ {
+            ast::Type::Int => Ok(Self::I32),
+            ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
+            _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
+        }
+    }
+}
+
 enum ExportType {
     Func = 0x00,
 }
@@ -26,7 +36,7 @@ enum ExportType {
 enum Opcode {
     Block = 0x02,
     End = 0x0b,
-    Call = 0x10,
+    CallIndirect = 0x11,
     Drop = 0x1a,
     LocalGet = 0x20,
     LocalTee = 0x22,
@@ -122,6 +132,15 @@ impl Default for FuncTypeSignature {
 }
 
 impl FuncTypeSignature {
+    fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
+        let (args, ret) = match typ {
+            ast::Type::Func(args, ret) => (args, ret),
+            _ => return Err(format!("Cannot convert type {:?} to WASM FuncTypeSignature", typ)),
+        };
+        let args = args.iter().map(|x| Numtype::from_ast_type(x)).collect::<Result<_, _>>()?;
+        let ret = Numtype::from_ast_type(ret)?;
+        Ok(Self { args, ret })
+    }
     // get byte representation
     fn as_functype(&self) -> Vec<u8> {
         function_type(
@@ -175,15 +194,7 @@ impl Default for ModuleBuilder {
 
 impl ModuleBuilder {
     fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<(), String> {
-        let ftype = match self.functypes.iter().enumerate()
-            .find_map(|(i, x)| if x == sig { Some(i) } else { None })
-        {
-            Some(i) => i as u32,
-            None => {
-                self.functypes.push(sig.clone());
-                self.functypes.len() as u32 - 1
-            }
-        };
+        let ftype = self.get_functype_idx(sig);
         let func_idx = self.funcs.len() as u32;
         if func_idx == u32::MAX {
             return Err(format!("too many functions"));
@@ -194,6 +205,18 @@ impl ModuleBuilder {
             self.exports.push(Export::new(name, func_idx));
         }
         Ok(())
+    }
+
+    fn get_functype_idx(&mut self, ftype: &FuncTypeSignature) -> u32 {
+        match self.functypes.iter().enumerate()
+            .find_map(|(i, x)| if x == ftype { Some(i) } else { None })
+        {
+            Some(i) => i as u32,
+            None => {
+                self.functypes.push(ftype.clone());
+                self.functypes.len() as u32 - 1
+            }
+        }
     }
 
     fn type_section(&self) -> Vec<u8> {
@@ -212,7 +235,11 @@ impl ModuleBuilder {
 
     fn table_section(&self) -> Vec<u8> {
         let n_funcs = self.funcs.len() as u8;
-        section_from_chunks(SectionType::Table, &[vec![0x70, 0x00, n_funcs]])
+        section_from_chunks(SectionType::Table, &[vec![
+            0x70,    // funcref
+            0x00,    // minimum
+            n_funcs  // maximum
+        ]])
     }
 
     fn export_section(&self) -> Vec<u8> {
@@ -227,7 +254,15 @@ impl ModuleBuilder {
 
     fn elem_section(&self) -> Vec<u8> {
         let segments = (0..self.funcs.len()).map(
-            |i| vec![0x00, Opcode::I32Const as u8, i as u8, Opcode::End as u8, 0x01, i as u8]
+            |i| {
+                let i = unsigned_leb128(i as u32);
+                [
+                    &[0x00, Opcode::I32Const as u8],
+                    i.as_slice(),
+                    &[Opcode::End as u8, 0x01],
+                    i.as_slice()
+                ].concat()
+            }
         ).collect::<Vec<_>>();
         section_from_chunks(SectionType::Element, &segments)
     }
@@ -253,7 +288,6 @@ impl ModuleBuilder {
 #[derive(Debug)]
 struct Local {
     name: String,
-    index: u32,
     depth: i32,
 }
 
@@ -276,10 +310,9 @@ impl Default for LocalData {
 
 impl LocalData {
     fn add_local(&mut self, name: String, typ: u8) -> u32 {
-        let index = self.locals.len() as u32;
-        self.locals.push(Local { name, index, depth: self.scope_depth });
+        self.locals.push(Local { name, depth: self.scope_depth });
         self.types.push(typ);
-        index
+        self.locals.len() as u32 - 1
     }
     fn get_idx(&self, name: &str) -> Option<u32> {
         for (i, local) in self.locals.iter().enumerate().rev() {
@@ -294,63 +327,88 @@ impl LocalData {
 struct WasmFunc {
     name: String,
     signature: FuncTypeSignature,
+    param_names: Vec<String>,
     locals: LocalData,
     bytes: Vec<u8>,
     export: bool,
 }
 
 impl WasmFunc {
-    fn new(name: String, export: bool) -> Self {
-        Self { name, signature: Default::default(), locals: Default::default(), bytes: vec![], export }
+    fn new(name: String, signature: FuncTypeSignature, export: bool) -> Self {
+        Self { name, signature, param_names: vec![], locals: Default::default(), bytes: vec![], export }
     }
     fn n_params(&self) -> u32 {
         self.signature.args.len() as u32
+    }
+    fn get_param_idx(&self, name: &str) -> Option<u32> {
+        self.param_names.iter().position(|x| x == name).map(|x| x as u32)
     }
 }
 
 pub struct Wasmizer {
     pub typecontext: TypeContext,
     builder: ModuleBuilder,
-    current_func: WasmFunc,
+    frames: Vec<WasmFunc>,
 }
 
 impl Wasmizer {
     fn new(typecontext: TypeContext) -> Self {
-        Self { typecontext, builder: Default::default(), current_func: WasmFunc::new("main".to_string(), true) }
+        Self { typecontext, builder: Default::default(), frames: vec![] }
     }
 
+    fn current_func(&self) -> &WasmFunc {
+        self.frames.last().unwrap()
+    }
+    fn current_func_mut(&mut self) -> &mut WasmFunc {
+        self.frames.last_mut().unwrap()
+    }
     fn locals(&self) -> &LocalData {
-        &self.current_func.locals
+        &self.current_func().locals
     }
     fn locals_mut(&mut self) -> &mut LocalData {
-        &mut self.current_func.locals
+        &mut self.current_func_mut().locals
     }
-    fn bytes(&self) -> &Vec<u8> {
-        &self.current_func.bytes
+    pub fn bytes(&self) -> &Vec<u8> {
+        &self.current_func().bytes
     }
     fn bytes_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.current_func.bytes
+        &mut self.current_func_mut().bytes
     }
 
-    pub fn finish_func(&mut self) {
-        self.current_func.bytes.push(Opcode::End as u8);
-        let export_name = if self.current_func.export {
-            Some(self.current_func.name.clone())
+    pub fn init_func(&mut self, name: String, argtypes: &[ast::Type], rettype: &ast::Type, export: bool) -> Result<(), String> {
+        let args = argtypes.iter().map(|t| Numtype::from_ast_type(t)).collect::<Result<Vec<_>, _>>()?;
+        let ret = Numtype::from_ast_type(rettype)?;
+        let func = WasmFunc::new(name, FuncTypeSignature { args, ret }, export);
+        self.frames.push(func);
+        Ok(())
+    }
+    pub fn finish_func(&mut self) -> Result<(), String> {
+        self.current_func_mut().bytes.push(Opcode::End as u8);
+        let export_name = if self.current_func().export {
+            Some(self.current_func().name.clone())
         }
         else {
             None
         };
+        let func = match self.frames.pop() {
+            Some(func) => func,
+            None => return Err("Tried to pop function when frames is empty".to_string()),
+        };
         self.builder.add_function(
-            &self.current_func.signature,
-            self.locals().types.clone(),
-            self.bytes().clone(),
+            &func.signature,
+            func.locals.types,
+            func.bytes,
             export_name
-        ).unwrap();
+        )
+    }
+    pub fn write_last_func_index(&mut self) {
+        let idx = self.builder.funcs.len() as i32 - 1;
+        self.write_const_i32(idx);
     }
 
     pub fn write_const_i32(&mut self, value: i32) {
-        self.current_func.bytes.push(Opcode::I32Const as u8);
-        self.current_func.bytes.append(&mut signed_leb128(value));
+        self.current_func_mut().bytes.push(Opcode::I32Const as u8);
+        self.current_func_mut().bytes.append(&mut signed_leb128(value));
     }
     pub fn write_add(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
@@ -405,10 +463,7 @@ impl Wasmizer {
         self.locals_mut().scope_depth += 1;
         if self.locals().scope_depth > 0 {
             self.bytes_mut().push(Opcode::Block as u8);
-            self.bytes_mut().push(match typ {
-                ast::Type::Int => Numtype::I32 as u8,
-                _ => return Err(format!("unsupported type: {:?}", typ)),
-            })
+            self.bytes_mut().push(Numtype::from_ast_type(typ)? as u8)
         }
         Ok(())
     }
@@ -425,33 +480,44 @@ impl Wasmizer {
         }
     }
 
+    pub fn add_param_name(&mut self, name: String) {
+        self.current_func_mut().param_names.push(name);
+    }
     pub fn create_variable(&mut self, name: String, typ: &ast::Type) -> Result<u32, String> {
         // only handle local variables for now
         // create a local variable
-        let typ = match typ {
-            ast::Type::Int => Numtype::I32 as u8,
-            _ => return Err(format!("unsupported variable type: {:?}", typ)),
-        };
+        let typ = Numtype::from_ast_type(typ)? as u8;
         Ok(self.locals_mut().add_local(name, typ))
     }
     pub fn set_variable(&mut self, idx: u32) {
         self.bytes_mut().push(Opcode::LocalTee as u8);
-        let idx = idx + self.current_func.n_params();
+        let idx = idx + self.current_func().n_params();
         self.bytes_mut().append(&mut unsigned_leb128(idx));
     }
     pub fn get_variable(&mut self, name: String) -> Result<(), String> {
         // can't yet deal with globals or upvalues
         self.bytes_mut().push(Opcode::LocalGet as u8);
+        // first look in local variables
         let idx = self.locals().get_idx(&name);
-        match idx {
-            Some(idx) => {
-                self.bytes_mut().append(&mut unsigned_leb128(idx));
-                Ok(())
-            },
-            None => {
-                Err(format!("variable {} not found in local scope", name))
-            }
+        if let Some(idx) = idx {
+            self.bytes_mut().append(&mut unsigned_leb128(idx));
+            return Ok(());
         }
+        // next look in function parameters
+        let idx = self.current_func().get_param_idx(&name);
+        if let Some(idx) = idx {
+            self.bytes_mut().append(&mut unsigned_leb128(idx));
+            return Ok(());
+        }
+        Err(format!("variable {} not found in local scope", name))
+    }
+
+    pub fn call_indirect(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let idx = self.builder.get_functype_idx(&FuncTypeSignature::from_ast_type(typ)?);
+        self.bytes_mut().push(Opcode::CallIndirect as u8);
+        self.bytes_mut().append(&mut unsigned_leb128(idx));  // signature index
+        self.bytes_mut().push(0x00);  // table index
+        Ok(())
     }
 
     fn to_bytes(&self) -> Vec<u8> {
@@ -472,16 +538,19 @@ pub fn wasmize(source: String, typecontext: TypeContext) -> Result<(Vec<u8>, ast
     #[cfg(feature = "debug")]
     {
         // print out bytes in form similar to xxd -g 1
-        for (i, b) in program.iter().enumerate() {
+        for (i, b) in bytes.iter().enumerate() {
             if i % 16 == 0 {
                 print!("{:04x}: ", i);
             }
             print!("{:02x} ", b);
-            if i % 16 == 15 || i == program.len() - 1 {
+            if i % 16 == 15 || i == bytes.len() - 1 {
                 println!();
             }
         }
         println!();
+
+        // dump to file
+        std::fs::write("test.wasm", &bytes).unwrap();
     }
     Ok((bytes, return_type))
 }
