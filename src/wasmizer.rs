@@ -16,6 +16,7 @@ enum SectionType {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Numtype {
+    F32 = 0x7d,
     I32 = 0x7f,
 }
 
@@ -23,6 +24,7 @@ impl Numtype {
     fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         match typ {
             ast::Type::Int => Ok(Self::I32),
+            ast::Type::Float => Ok(Self::F32),
             ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
             _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }
@@ -41,10 +43,15 @@ enum Opcode {
     LocalGet = 0x20,
     LocalTee = 0x22,
     I32Const = 0x41,
+    F32Const = 0x43,
     I32Add = 0x6a,
     I32Sub = 0x6b,
     I32Mul = 0x6c,
-    I32DivS = 0x6d
+    I32DivS = 0x6d,
+    F32Add = 0x92,
+    F32Sub = 0x93,
+    F32Mul = 0x94,
+    F32Div = 0x95,
 }
 
 fn unsigned_leb128(value: u32) -> Vec<u8> {
@@ -403,20 +410,43 @@ impl Wasmizer {
     }
     pub fn write_last_func_index(&mut self) {
         let idx = self.builder.funcs.len() as i32 - 1;
-        self.write_const_i32(idx);
+        self.bytes_mut().push(Opcode::I32Const as u8);
+        self.bytes_mut().append(&mut signed_leb128(idx));
     }
 
-    pub fn write_const_i32(&mut self, value: i32) {
-        self.current_func_mut().bytes.push(Opcode::I32Const as u8);
-        self.current_func_mut().bytes.append(&mut signed_leb128(value));
+    pub fn write_const(&mut self, value: &str, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                let value = value.parse::<i32>().unwrap();
+                self.bytes_mut().push(Opcode::I32Const as u8);
+                self.bytes_mut().append(&mut signed_leb128(value));
+            },
+            ast::Type::Float => {
+                let value = value.parse::<f32>().unwrap();
+                self.bytes_mut().push(Opcode::F32Const as u8);
+                self.bytes_mut().extend_from_slice(&value.to_le_bytes());
+            }
+            ast::Type::Bool => {
+                let value = value.parse::<bool>().unwrap();
+                self.bytes_mut().push(Opcode::I32Const as u8);
+                self.bytes_mut().push(if value { 1 } else { 0 });
+            }
+            _ => {
+                return Err(format!("unsupported literal of type: {:?}", typ));
+            }
+        }
+        Ok(())
     }
     pub fn write_add(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
                 self.bytes_mut().push(Opcode::I32Add as u8);
             },
+            ast::Type::Float => {
+                self.bytes_mut().push(Opcode::F32Add as u8);
+            },
             _ => {
-                return Err(format!("unsupported type: {:?}", typ));
+                return Err(format!("Cannot add values of type {:?}", typ));
             }
         }
         Ok(())
@@ -426,8 +456,11 @@ impl Wasmizer {
             ast::Type::Int => {
                 self.bytes_mut().push(Opcode::I32Sub as u8);
             },
+            ast::Type::Float => {
+                self.bytes_mut().push(Opcode::F32Sub as u8);
+            },
             _ => {
-                return Err(format!("unsupported type: {:?}", typ));
+                return Err(format!("Cannot subtract values of type {:?}", typ));
             }
         }
         Ok(())
@@ -437,8 +470,11 @@ impl Wasmizer {
             ast::Type::Int => {
                 self.bytes_mut().push(Opcode::I32Mul as u8);
             },
+            ast::Type::Float => {
+                self.bytes_mut().push(Opcode::F32Mul as u8);
+            },
             _ => {
-                return Err(format!("unsupported type: {:?}", typ));
+                return Err(format!("Cannot multiply values of type {:?}", typ));
             }
         }
         Ok(())
@@ -448,8 +484,11 @@ impl Wasmizer {
             ast::Type::Int => {
                 self.bytes_mut().push(Opcode::I32DivS as u8);
             },
+            ast::Type::Float => {
+                self.bytes_mut().push(Opcode::F32Div as u8);
+            },
             _ => {
-                return Err(format!("unsupported type: {:?}", typ));
+                return Err(format!("Cannot divide values of type {:?}", typ));
             }
         }
         Ok(())

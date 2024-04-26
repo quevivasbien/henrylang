@@ -41,13 +41,6 @@ impl Expression for Literal {
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
-        match self.typ {
-            Type::Int => {
-                let i = self.value.parse::<i32>().unwrap();
-                wasmizer.write_const_i32(i);
-            },
-            _ => return Err(format!("Cannot wasmize literal of type {:?}", self.typ)),
-        }
-        Ok(())
+        wasmizer.write_const(&self.value, &self.typ)
     }
 }
