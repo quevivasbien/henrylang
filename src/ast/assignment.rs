@@ -98,7 +98,7 @@ impl Expression for Assignment {
         compiler.set_variable(idx, typ.is_heap())
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let typ = self.value.get_type()?;
         let name = match &typ {
             Type::Func(paramtypes, _) => if paramtypes.is_empty() {
@@ -112,6 +112,6 @@ impl Expression for Assignment {
         let idx = wasmizer.create_variable(name, &typ)?;
         self.value.wasmize(wasmizer)?;
         wasmizer.set_variable(idx);
-        Ok(())
+        Ok(0)
     }
 }

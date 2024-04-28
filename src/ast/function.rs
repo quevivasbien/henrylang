@@ -105,7 +105,7 @@ impl Expression for Function {
         compiler.write_function(inner_compiler)
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let (ptypes, rtype) = match self.get_type()? {
             Type::Func(ptypes, rtype) => (ptypes, *rtype),
             _ => unreachable!(),
@@ -120,6 +120,6 @@ impl Expression for Function {
         wasmizer.finish_func()?;
 
         wasmizer.write_last_func_index();
-        Ok(())
+        Ok(0)
     }
 }

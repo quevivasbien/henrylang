@@ -1,5 +1,4 @@
 use std::env;
-use rustc_hash::FxHashMap;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use henrylang::*;
@@ -7,7 +6,7 @@ use henrylang::*;
 fn run_wasm(bytes: &[u8]) -> Result<(), String> {
     let mut store = wasmer::Store::default();
     let module = wasmer::Module::new(&store, bytes).map_err(|e| format!("{}", e))?;
-    let import_object = wasmer::imports! {};
+    let import_object = get_wasmer_imports(&mut store);
     let instance = wasmer::Instance::new(&mut store, &module, &import_object).map_err(|e| format!("{}", e))?;
 
     let main = instance.exports.get_function("main").map_err(|e| format!("{}", e))?;
@@ -41,7 +40,7 @@ fn repl() {
                     Err(e) => println!("{}", e),
                 }
                 #[cfg(feature = "wasm")]
-                match wasmizer::wasmize(line, std::rc::Rc::new(std::cell::RefCell::new(FxHashMap::default()))) {
+                match wasmize(line, Env::default()) {
                     Ok((bytes, _)) => if let Err(e) = run_wasm(&bytes) {
                         println!("{}", e);
                     },
@@ -78,7 +77,7 @@ fn run_file(path: &str) {
         Err(e) => println!("{}", e),
     }
     #[cfg(feature = "wasm")]
-    match wasmizer::wasmize(contents, std::rc::Rc::new(std::cell::RefCell::new(FxHashMap::default()))) {
+    match wasmize(contents, Env::default()) {
         Ok((bytes, _)) => if let Err(e) = run_wasm(&bytes) {
             println!("{}", e);
         },

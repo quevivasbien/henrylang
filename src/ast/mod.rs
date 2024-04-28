@@ -87,7 +87,7 @@ pub trait Expression: std::fmt::Debug + Downcast {
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
     #[allow(unused_variables)]
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         Err(format!("wasmize not implemented for {}", std::any::type_name::<Self>()))
     }
 }

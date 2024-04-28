@@ -61,7 +61,7 @@ impl Expression for Block {
         compiler.end_scope(self.get_type()?.is_heap())
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         wasmizer.begin_scope(&self.get_type()?)?;
         for (i, e) in self.expressions.iter().enumerate() {
             e.wasmize(wasmizer)?;
@@ -70,6 +70,6 @@ impl Expression for Block {
             }
         }
         wasmizer.end_scope();
-        Ok(())
+        Ok(0)
     }
 }

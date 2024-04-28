@@ -97,13 +97,18 @@ impl Expression for Call {
         Ok(())
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let callee_type = self.validate()?;
         for arg in self.args.iter() {
             arg.wasmize(wasmizer)?;
         }
-        self.callee.wasmize(wasmizer)?;
-        wasmizer.call_indirect(&callee_type)?;
-        Ok(())
+        let is_global = self.callee.wasmize(wasmizer)?;
+        if is_global == 0 {
+            wasmizer.call_indirect(&callee_type)?;
+        }
+        else {
+            wasmizer.call()?;
+        }
+        Ok(0)
     }
 }

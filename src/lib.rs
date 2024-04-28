@@ -2,11 +2,15 @@ mod ast;
 mod builtins;
 mod chunk;
 mod compiler;
+mod env;
 mod parser;
 mod scanner;
 mod token;
 pub mod values;
-pub mod wasmizer;
+mod wasmizer;
+mod wasmtypes;
 mod vm;
 
 pub use vm::VM;
+pub use wasmizer::wasmize;
+pub use env::{Env, get_wasmer_imports};

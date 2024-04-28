@@ -137,7 +137,7 @@ impl Expression for Binary {
         Ok(())
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let left_type = self.left.get_type()?;
         let right_type = self.right.get_type()?;
 
@@ -156,6 +156,7 @@ impl Expression for Binary {
             TokenType::Star => wasmizer.write_mul(&left_type),
             TokenType::Slash => wasmizer.write_div(&left_type),
             _ => unimplemented!(),
-        }
+        }?;
+        Ok(0)
     }
 }

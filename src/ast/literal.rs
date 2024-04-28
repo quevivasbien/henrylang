@@ -40,7 +40,7 @@ impl Expression for Literal {
         compiler.write_constant(value)
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         wasmizer.write_const(&self.value, &self.typ)
     }
 }

@@ -61,7 +61,7 @@ impl Expression for Variable {
         compiler.get_variable(name, is_heap)
     }
 
-    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<(), String> {
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let name = self.get_expanded_name()?;
         wasmizer.get_variable(name)
     }
