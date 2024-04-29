@@ -360,7 +360,7 @@ impl Wasmizer {
         self.bytes_mut().append(&mut signed_leb128(idx));
     }
 
-    pub fn write_const(&mut self, value: &str, typ: &ast::Type) -> Result<i32, String> {
+    pub fn write_const(&mut self, value: &str, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
                 let value = value.parse::<i32>().unwrap();
@@ -377,12 +377,138 @@ impl Wasmizer {
                 self.write_opcode(Opcode::I32Const);
                 self.bytes_mut().push(if value { 1 } else { 0 });
             }
+            ast::Type::Str => {
+                let value = value[1..value.len() - 1].to_string();
+                let chunks = value.as_bytes().chunks(4);
+                let len = chunks.len();
+                if len > u16::MAX as usize {
+                    return Err(format!("string too long: {}", value));
+                }
+                for b in chunks.rev() {
+                    let x = if b.len() == 4 {
+                        u32::from_le_bytes(b.try_into().unwrap())
+                    }
+                    else {
+                        let padding = vec![0; 4 - b.len()];
+                        u32::from_le_bytes([padding.as_slice(), b].concat().as_slice().try_into().unwrap())
+                    };
+                    self.write_opcode(Opcode::I32Const);
+                    self.bytes_mut().append(&mut unsigned_leb128(x));
+                }
+                self.write_array(len as u16, &ast::Type::Int)?;
+            }
             _ => {
                 return Err(format!("unsupported literal of type: {:?}", typ));
             }
         }
-        Ok(0)
+        Ok(())
     }
+
+    pub fn write_negate(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                self.write_opcode(Opcode::I32Const);
+                self.bytes_mut().push(0x7f);  // -1
+                self.write_opcode(Opcode::I32Mul);
+            }
+            ast::Type::Bool => {
+                self.write_opcode(Opcode::I32Eqz);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Neg);
+            }
+            _ => {
+                return Err(format!("Cannot take negative of values of type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn write_equal(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int | ast::Type::Bool => {
+                self.write_opcode(Opcode::I32Eq);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Eq);
+            }
+            _ => {
+                return Err(format!("Cannot compare values of type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+    pub fn write_not_equal(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int | ast::Type::Bool => {
+                self.write_opcode(Opcode::I32Ne);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Ne);
+            }
+            _ => {
+                return Err(format!("Cannot compare values of type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+    pub fn write_greater(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                self.write_opcode(Opcode::I32GtS);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Gt);
+            }
+            _ => {
+                return Err(format!("Order is not defined for type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+    pub fn write_greater_equal(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                self.write_opcode(Opcode::I32GeS);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Ge);
+            }
+            _ => {
+                return Err(format!("Order is not defined for type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+    pub fn write_less(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                self.write_opcode(Opcode::I32LtS);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Lt);
+            }
+            _ => {
+                return Err(format!("Order is not defined for type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+    pub fn write_less_equal(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Int => {
+                self.write_opcode(Opcode::I32LeS);
+            }
+            ast::Type::Float => {
+                self.write_opcode(Opcode::F32Le);
+            }
+            _ => {
+                return Err(format!("Order is not defined for type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn write_add(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
@@ -439,9 +565,30 @@ impl Wasmizer {
         }
         Ok(())
     }
+    pub fn write_and(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Bool => {
+                self.write_opcode(Opcode::I32And);
+            },
+            _ => {
+                return Err(format!("Cannot AND values of type {:?}", typ));
+            }
+        }
+        Ok(())  
+    }
+    pub fn write_or(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Bool => {
+                self.write_opcode(Opcode::I32Or);
+            },
+            _ => {
+                return Err(format!("Cannot OR values of type {:?}", typ));
+            }
+        }
+        Ok(())
+    }
 
     pub fn write_array(&mut self, len: u16, typ: &ast::Type) -> Result<(), String> {
-        println!("Before write array: {:02x?}", self.bytes_mut());
         // create locals to store info about array as it is constructed
         let arrname = format!("<arr[{}{}]>", len, Numtype::from_ast_type(typ)? as u8);
         let startptr_idx = unsigned_leb128(self.locals_mut().add_local(format!("{}startptr", arrname), Numtype::I32 as u8));
@@ -450,8 +597,7 @@ impl Wasmizer {
         
         // determine the bytes per value needed
         let memsize = match typ {
-            ast::Type::Int => 4,
-            ast::Type::Float => 4,
+            ast::Type::Int | ast::Type::Bool | ast::Type::Float => 4,
             _ => return Err(format!("cannot allocate memory for array of type {:?}", typ))
         } as u8;
         // call alloc
@@ -469,7 +615,7 @@ impl Wasmizer {
         // write vars on stack to memory
         // figure out what opcode to use to store values in memory
         let store_op = match typ {
-            ast::Type::Int => Opcode::I32Store,
+            ast::Type::Int | ast::Type::Bool => Opcode::I32Store,
             ast::Type::Float => Opcode::F32Store,
             _ => unreachable!("Should have been filtered out at beginning of function")
         };
@@ -477,11 +623,16 @@ impl Wasmizer {
             self.write_to_memory(&memptr_idx, &value_idx, store_op, memsize)?;
         }
 
-        // return startptr
+        // return [startptr len]
         self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend(&startptr_idx);
-
-        println!("After write array: {:02x?}", self.bytes_mut());
+        self.write_opcode(Opcode::I64ExtendI32U);
+        self.write_opcode(Opcode::I64Const);
+        self.bytes_mut().push(32);
+        self.write_opcode(Opcode::I64Shl);
+        self.write_opcode(Opcode::I64Const);
+        self.bytes_mut().append(&mut unsigned_leb128(len as u32));
+        self.write_opcode(Opcode::I64Add);
         Ok(())
     }
 

@@ -17,6 +17,7 @@ pub enum SectionType {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Numtype {
     F32 = 0x7d,
+    I64 = 0x7e,
     I32 = 0x7f,
 }
 
@@ -24,9 +25,11 @@ impl Numtype {
     pub fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         match typ {
             ast::Type::Int => Ok(Self::I32),
+            ast::Type::Bool => Ok(Self::I32),
             ast::Type::Float => Ok(Self::F32),
             ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
-            ast::Type::Arr(_) => Ok(Self::I32),  // arrays are referred to by a fat pointer containing memory loc and length
+            ast::Type::Arr(_) => Ok(Self::I64),  // arrays are referred to by a fat pointer containing memory loc and length
+            ast::Type::Str => Ok(Self::I64),  // string are represented as an Arr(Int)
             _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }
     }
@@ -51,15 +54,35 @@ pub enum Opcode {
     I32Store = 0x36,
     F32Store = 0x38,
     I32Const = 0x41,
+    I64Const = 0x42,
     F32Const = 0x43,
+    I32Eqz = 0x45,
+    I32Eq = 0x46,
+    I32Ne = 0x47,
+    I32LtS = 0x48,
+    I32GtS = 0x4a,
+    I32LeS = 0x4c,
+    I32GeS = 0x4e,
+    F32Eq = 0x5b,
+    F32Ne = 0x5c,
+    F32Lt = 0x5d,
+    F32Gt = 0x5e,
+    F32Le = 0x5f,
+    F32Ge = 0x60,
     I32Add = 0x6a,
     I32Sub = 0x6b,
     I32Mul = 0x6c,
     I32DivS = 0x6d,
+    I32And = 0x71,
+    I32Or = 0x72,
+    I64Add = 0x7c,
+    F32Neg = 0x8c,
+    I64Shl = 0x86,
     F32Add = 0x92,
     F32Sub = 0x93,
     F32Mul = 0x94,
     F32Div = 0x95,
+    I64ExtendI32U = 0xad,
 }
 
 
@@ -80,6 +103,7 @@ pub fn unsigned_leb128(value: u32) -> Vec<u8> {
     result
 }
 
+// TODO: I don't think this works correctly.
 pub fn signed_leb128(value: i32) -> Vec<u8> {
     unsigned_leb128(value as u32)
 }

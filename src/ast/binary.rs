@@ -151,11 +151,19 @@ impl Expression for Binary {
         self.left.wasmize(wasmizer)?;
         self.right.wasmize(wasmizer)?;
         match self.op {
+            TokenType::Eq => wasmizer.write_equal(&left_type),
+            TokenType::NEq => wasmizer.write_not_equal(&left_type),
+            TokenType::GT => wasmizer.write_greater(&left_type),
+            TokenType::GEq => wasmizer.write_greater_equal(&left_type),
+            TokenType::LT => wasmizer.write_less(&left_type),
+            TokenType::LEq => wasmizer.write_less_equal(&left_type),
             TokenType::Plus => wasmizer.write_add(&left_type),
             TokenType::Minus => wasmizer.write_sub(&left_type),
             TokenType::Star => wasmizer.write_mul(&left_type),
             TokenType::Slash => wasmizer.write_div(&left_type),
-            _ => unimplemented!(),
+            TokenType::And => wasmizer.write_and(&left_type),
+            TokenType::Or => wasmizer.write_or(&left_type),
+            _ => return Err(format!("Operator {:?} not supported", self.op)),
         }?;
         Ok(0)
     }

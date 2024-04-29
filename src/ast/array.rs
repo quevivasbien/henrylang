@@ -85,7 +85,7 @@ impl Expression for Array {
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let len = match &self.elements {
             ArrayElems::Elements(elems) => {
-                for elem in elems.iter() {
+                for elem in elems.iter().rev() {
                     elem.wasmize(wasmizer)?;
                 }
                 elems.len() as u16

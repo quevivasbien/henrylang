@@ -41,6 +41,7 @@ impl Expression for Literal {
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
-        wasmizer.write_const(&self.value, &self.typ)
+        wasmizer.write_const(&self.value, &self.typ)?;
+        Ok(0)
     }
 }
