@@ -81,6 +81,24 @@ impl Expression for Array {
             compiler.write_array(len)
         }
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let len = match &self.elements {
+            ArrayElems::Elements(elems) => {
+                for elem in elems.iter() {
+                    elem.wasmize(wasmizer)?;
+                }
+                elems.len() as u16
+            },
+            ArrayElems::Empty(_) => 0,
+        };
+        let typ = match self.get_type()? {
+            Type::Arr(t) => t,
+            _ => unreachable!()
+        };
+        wasmizer.write_array(len, &typ)?;
+        Ok(0)
+    }
 }
 
 

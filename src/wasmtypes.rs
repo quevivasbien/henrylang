@@ -7,6 +7,8 @@ pub enum SectionType {
     Import = 0x02,
     Function = 0x03,
     Table = 0x04,
+    Memory = 0x05,
+    Global = 0x06,
     Export = 0x07,
     Element = 0x09,
     Code = 0x0a,
@@ -24,15 +26,19 @@ impl Numtype {
             ast::Type::Int => Ok(Self::I32),
             ast::Type::Float => Ok(Self::F32),
             ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
+            ast::Type::Arr(_) => Ok(Self::I32),  // arrays are referred to by a fat pointer containing memory loc and length
             _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum ExportType {
     Func = 0x00,
+    Memory = 0x02,
 }
 
+#[derive(Clone, Copy)]
 pub enum Opcode {
     Block = 0x02,
     End = 0x0b,
@@ -40,7 +46,10 @@ pub enum Opcode {
     CallIndirect = 0x11,
     Drop = 0x1a,
     LocalGet = 0x20,
+    LocalSet = 0x21,
     LocalTee = 0x22,
+    I32Store = 0x36,
+    F32Store = 0x38,
     I32Const = 0x41,
     F32Const = 0x43,
     I32Add = 0x6a,

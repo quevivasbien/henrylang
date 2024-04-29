@@ -9,7 +9,6 @@ fn print<T: std::fmt::Display>(x: T) -> T {
     x
 }
 
-
 pub fn get_wasmer_imports(store: &mut wasmer::Store) -> wasmer::Imports {
     wasmer::imports! {
         "env" => {

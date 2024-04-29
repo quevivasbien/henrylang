@@ -12,6 +12,8 @@ fn run_wasm(bytes: &[u8]) -> Result<(), String> {
     let main = instance.exports.get_function("main").map_err(|e| format!("{}", e))?;
     let result = main.call(&mut store, &[]).map_err(|e| format!("{}", e))?;
     println!("Result: {:?}", result);
+    let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
+    println!("Memory: {:?}", memory.view(&store));
     Ok(())
 }
 
@@ -25,7 +27,7 @@ fn repl() {
     );
     println!("\n[ henrylang v0.4.0 ]\n");
     #[cfg(not(feature = "wasm"))]
-    let mut vm = vm::VM::new();
+    let mut vm = VM::new();
     loop {
         let readline = rl.readline("\x1b[1mhenry>\x1b[0m ");
         match readline {
