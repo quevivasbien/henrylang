@@ -111,7 +111,7 @@ impl Expression for Assignment {
         };
         let idx = wasmizer.create_variable(name, &typ)?;
         self.value.wasmize(wasmizer)?;
-        wasmizer.set_variable(idx);
+        wasmizer.set_variable(idx, &typ)?;
         Ok(0)
     }
 }

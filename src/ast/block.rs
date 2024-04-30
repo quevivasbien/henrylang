@@ -69,7 +69,7 @@ impl Expression for Block {
                 wasmizer.write_drop();
             }
         }
-        wasmizer.end_scope();
+        wasmizer.end_scope()?;
         Ok(0)
     }
 }

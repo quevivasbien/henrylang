@@ -44,13 +44,17 @@ pub enum ExportType {
 #[derive(Clone, Copy)]
 pub enum Opcode {
     Block = 0x02,
+    Loop = 0x03,
     End = 0x0b,
+    BrIf = 0x0d,
     Call = 0x10,
     CallIndirect = 0x11,
     Drop = 0x1a,
     LocalGet = 0x20,
     LocalSet = 0x21,
     LocalTee = 0x22,
+    GlobalGet = 0x23,
+    GlobalSet = 0x24,
     I32Store = 0x36,
     F32Store = 0x38,
     I32Const = 0x41,
@@ -78,12 +82,16 @@ pub enum Opcode {
     I64Add = 0x7c,
     F32Neg = 0x8c,
     I64Shl = 0x86,
+    I64ShrU = 0x88,
     F32Add = 0x92,
     F32Sub = 0x93,
     F32Mul = 0x94,
     F32Div = 0x95,
+    I32WrapI64 = 0xa7,
     I64ExtendI32U = 0xad,
 }
+
+pub const MEMCOPY: [u8; 4] = [0xfc, 0x0a, 0x00, 0x00];
 
 
 pub fn unsigned_leb128(value: u32) -> Vec<u8> {
@@ -161,18 +169,18 @@ pub fn function_body(local_types: Vec<u8>, mut code: Vec<u8>) -> Vec<u8> {
 #[derive(PartialEq, Eq, Clone)]
 pub struct FuncTypeSignature {
     pub args: Vec<Numtype>,
-    pub ret: Numtype, 
+    pub ret: Option<Numtype>, 
 }
 
 impl Default for FuncTypeSignature {
     fn default() -> Self {
-        Self { args: vec![], ret: Numtype::I32 }
+        Self { args: vec![], ret: None }
     }
 }
 
 impl FuncTypeSignature {
     pub fn new(args: Vec<Numtype>, ret: Numtype) -> Self {
-        Self { args, ret }
+        Self { args, ret: Some(ret) }
     }
     pub fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         let (args, ret) = match typ {
@@ -181,13 +189,17 @@ impl FuncTypeSignature {
         };
         let args = args.iter().map(|x| Numtype::from_ast_type(x)).collect::<Result<_, _>>()?;
         let ret = Numtype::from_ast_type(ret)?;
-        Ok(Self { args, ret })
+        Ok(Self::new(args, ret))
     }
     // get byte representation
     pub fn as_functype(&self) -> Vec<u8> {
+        let ret = match self.ret {
+            Some(x) => vec![x as u8],
+            None => vec![],
+        };
         function_type(
             self.args.iter().map(|x| *x as u8).collect(),
-            vec![self.ret as u8]
+            ret
         )
     }
 }
