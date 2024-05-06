@@ -14,7 +14,7 @@ pub enum SectionType {
     Code = 0x0a,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Numtype {
     F32 = 0x7d,
     I64 = 0x7e,
@@ -166,7 +166,7 @@ pub fn function_body(local_types: Vec<u8>, mut code: Vec<u8>) -> Vec<u8> {
 }
 
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct FuncTypeSignature {
     pub args: Vec<Numtype>,
     pub ret: Option<Numtype>, 

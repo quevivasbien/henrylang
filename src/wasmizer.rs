@@ -669,22 +669,20 @@ impl Wasmizer {
 
         // offset = fatptr >> 32
         self.write_opcode(Opcode::LocalGet);
-        self.bytes_mut().extend_from_slice(&fatptr_idx);
-        self.write_opcode(Opcode::I32Const);
+        self.bytes_mut().extend_from_slice(&fatptr_idx);  // get fatptr
+        self.write_opcode(Opcode::I64Const);
         self.write_byte(0x20);
-        self.write_opcode(Opcode::I64ShrU);
-        self.write_opcode(Opcode::I32WrapI64);
+        self.write_opcode(Opcode::I64ShrU);  // shift right 32 bits
+        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
         self.write_opcode(Opcode::LocalSet);
-        self.bytes_mut().extend_from_slice(&offset_idx);
+        self.bytes_mut().extend_from_slice(&offset_idx);  // set as offset
         // size = lowest 32 bits of fatptr
         self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend_from_slice(&fatptr_idx);
-        self.write_opcode(Opcode::I32WrapI64);
+        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
         self.write_opcode(Opcode::LocalSet);
-        self.bytes_mut().extend_from_slice(&size_idx);
+        self.bytes_mut().extend_from_slice(&size_idx);  // set as size
 
-        // let offset = (fatptr >> 32) as u32;
-        // let size = (fatptr & 0xffffffff) as u32;
         // write destination as current value of memptr
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
@@ -695,13 +693,26 @@ impl Wasmizer {
         self.write_opcode(Opcode::I32Const);
         self.bytes_mut().extend_from_slice(&size_idx);
         self.bytes_mut().extend_from_slice(&MEMCOPY);
-        // write memptr
+        // set memptr to memptr + size
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::LocalGet);
+        self.bytes_mut().extend_from_slice(&size_idx);
+        self.write_opcode(Opcode::I32Add);
         self.write_opcode(Opcode::GlobalSet);
         self.write_byte(0x00);
 
-        // return offset
+        // return [offset, size]
         self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend_from_slice(&offset_idx);
+        self.write_opcode(Opcode::I64ExtendI32U);
+        self.write_opcode(Opcode::I64Const);
+        self.write_byte(32);
+        self.write_opcode(Opcode::I64Shl);
+        self.write_opcode(Opcode::LocalGet);
+        self.bytes_mut().extend_from_slice(&size_idx);
+        self.write_opcode(Opcode::I64ExtendI32U);
+        self.write_opcode(Opcode::I64Add);
 
         Ok(())
     }
@@ -806,19 +817,22 @@ impl Wasmizer {
         Ok(())
     }
     pub fn end_scope(&mut self) -> Result<(), String> {
+        // free memory
+        let n_frees = self.current_func_mut().allocs.pop().unwrap();
+        if n_frees > 0 {
+            self.free_multiple(n_frees)?;
+        }
+        // Write END opcode, if we're not at the top level of a function
         if self.locals().scope_depth > 0 {
             self.write_opcode(Opcode::End);
         }
+        // pop out-of-scope local variables
         self.locals_mut().scope_depth -= 1;
         while let Some(local) = self.locals().locals.last() {
             if local.depth <= self.locals().scope_depth {
                 break;
             }
             self.locals_mut().locals.pop();
-        }
-        let n_frees = self.current_func_mut().allocs.pop().unwrap();
-        if n_frees > 0 {
-            self.free_multiple(n_frees)?;
         }
         Ok(())
     }
@@ -833,16 +847,15 @@ impl Wasmizer {
         Ok(self.locals_mut().add_local(name, typ))
     }
     pub fn set_variable(&mut self, idx: u32, typ: &ast::Type) -> Result<(), String> {
-        self.write_opcode(Opcode::LocalTee);
         let idx = idx + self.current_func().n_params();
         
         // if typ is a heap-allocated type, we also need to copy the memory
         if matches!(typ, ast::Type::Arr(_) | ast::Type::Str) {
             self.copy_array(idx)?;
         }
-        else {
-            self.bytes_mut().append(&mut unsigned_leb128(idx));
-        }
+        self.write_opcode(Opcode::LocalTee);
+        self.bytes_mut().append(&mut unsigned_leb128(idx));
+
         Ok(())
     }
     pub fn get_variable(&mut self, name: String) -> Result<i32, String> {
