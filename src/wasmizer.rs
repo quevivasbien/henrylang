@@ -307,6 +307,7 @@ impl Wasmizer {
             // return the start index of the new memory chunk
             0x20,  // local.get
             0x01,  // local index
+            // 0x23, 0x00, 0x10, 0x00, 0x1a, // print memptr
             0x0b,  // end
         ];
         builder.add_function(
@@ -324,12 +325,10 @@ impl Wasmizer {
             0x28,  // i32.load
             0x02,  // alignment
             0x00,  // load offset
-            0x41,  // i32.const
-            0x04,  // i32 literal
-            0x6a,  // i32.add
             0x6b,  // i32.sub
             0x24,  // global.set
             0x00,  // global index
+            // 0x23, 0x00, 0x10, 0x00, 0x1a, // print memptr
             0x0b,  // end
         ];
         builder.add_function(
@@ -420,6 +419,8 @@ impl Wasmizer {
                 self.write_byte(if value { 1 } else { 0 });
             }
             ast::Type::Str => {
+                // string will be stored in source as sequence of i32 constants
+                // i.e. chunks each of size 4 bytes
                 let value = value[1..value.len() - 1].to_string();
                 let chunks = value.as_bytes().chunks(4);
                 let len = chunks.len();
@@ -431,8 +432,8 @@ impl Wasmizer {
                         u32::from_le_bytes(b.try_into().unwrap())
                     }
                     else {
-                        let padding = vec![0; 4 - b.len()];
-                        u32::from_le_bytes([padding.as_slice(), b].concat().as_slice().try_into().unwrap())
+                        let padding = &[0; 4][0..(4 - b.len())];
+                        u32::from_le_bytes([padding, b].concat().as_slice().try_into().unwrap())
                     };
                     self.write_opcode(Opcode::I32Const);
                     self.bytes_mut().append(&mut unsigned_leb128(x));
@@ -668,7 +669,8 @@ impl Wasmizer {
         let size_idx = unsigned_leb128(self.locals_mut().add_local(format!("<size>"), Numtype::I32 as u8));
 
         // offset = fatptr >> 32
-        self.write_opcode(Opcode::LocalGet);
+        // fatptr should be last thing on stack at this point
+        self.write_opcode(Opcode::LocalTee);
         self.bytes_mut().extend_from_slice(&fatptr_idx);  // get fatptr
         self.write_opcode(Opcode::I64Const);
         self.write_byte(0x20);
@@ -683,16 +685,20 @@ impl Wasmizer {
         self.write_opcode(Opcode::LocalSet);
         self.bytes_mut().extend_from_slice(&size_idx);  // set as size
 
-        // write destination as current value of memptr
+        // destination is current value of memptr
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
-        // write source address as offset
+        // source address is `offset`
         self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend_from_slice(&offset_idx);
-        // copy size bytes
-        self.write_opcode(Opcode::I32Const);
+        // copy `size` bytes
+        self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend_from_slice(&size_idx);
         self.bytes_mut().extend_from_slice(&MEMCOPY);
+
+        // increment n allocs
+        *self.current_func_mut().allocs.last_mut().unwrap() += 1;
+
         // set memptr to memptr + size
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
