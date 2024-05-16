@@ -73,6 +73,13 @@ fn run_wasm(bytes: &[u8], typ: Type) -> Result<(), String> {
         _ => println!("Unexpected result: {:?}", result),
     }
 
+    #[cfg(feature = "debug")]
+    {
+        // print start of memory as a string
+        let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
+        view_memory(memory.view(&store), 0x100, Type::Str)?;
+    }
+
     Ok(())
 }
 
