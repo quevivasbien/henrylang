@@ -76,6 +76,7 @@ fn run_wasm(bytes: &[u8], typ: Type) -> Result<(), String> {
     #[cfg(feature = "debug")]
     {
         // print start of memory as a string
+        print!("Memory: ");
         let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
         view_memory(memory.view(&store), 0x100, Type::Str)?;
     }

@@ -55,6 +55,7 @@ pub enum Opcode {
     LocalTee = 0x22,
     GlobalGet = 0x23,
     GlobalSet = 0x24,
+    I32Load = 0x28,
     I32Store = 0x36,
     F32Store = 0x38,
     I32Const = 0x41,
