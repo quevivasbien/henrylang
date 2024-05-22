@@ -318,26 +318,27 @@ impl Wasmizer {
         ).unwrap();
 
         let free_code = vec![
-            Opcode::I32Const as u8, 88, Opcode::Call as u8, 0x00, Opcode::Drop as u8,
-            0x23, 0x00, 0x10, 0x00, 0x1a, // print memptr
+            // Opcode::I32Const as u8, 0xd8, 0x00, Opcode::Call as u8, 0x00, Opcode::Drop as u8, // print 88
             // get memptr
             Opcode::GlobalGet as u8,
             0x00,  // global index
             // load size of allocation (stored at *memptr)
             Opcode::GlobalGet as u8,
             0x00,  // global index
+            // Opcode::Call as u8, 0x00, // print memptr
             Opcode::I32Load as u8,
             0x02,  // alignment
             0x00,  // load offset
-            0x10, 0x00,  // print chunk size
             // add 4 to size of allocation (since size itself takes 4 bytes)
             Opcode::I32Const as u8,
             0x04,  // i32 literal
             Opcode::I32Add as u8,
+            // Opcode::Call as u8, 0x00, // print dealloc size
             // subtract allocation size from memptr; set as new memptr value
             Opcode::I32Sub as u8,
             Opcode::GlobalSet as u8,
             0x00,  // global index
+            // Opcode::I32Const as u8, 0xa8, 0x7f, Opcode::Call as u8, 0x00, Opcode::Drop as u8, // print -88
             Opcode::End as u8,
         ];
         builder.add_function(
@@ -440,9 +441,9 @@ impl Wasmizer {
         self.write_byte(0x00);  // break depth
         self.write_opcode(Opcode::End);
 
-        // print 8888 twice to show that we're done
+        // print -8888 twice to show that we're done
         self.write_opcode(Opcode::I32Const);
-        self.bytes_mut().extend_from_slice(&signed_leb128(8888));
+        self.bytes_mut().extend_from_slice(&signed_leb128(-8888));
         self.write_opcode(Opcode::Call);
         self.write_byte(0x00);
         self.write_opcode(Opcode::Call);
@@ -768,9 +769,12 @@ impl Wasmizer {
     // sets offset to value of memptr, then increments memptr by size
     // if write_size is true, write the size of the allocation at the end of the block
     fn copy_mem(&mut self, offset_idx: &[u8], size_idx: &[u8], write_size: bool) {
-        // destination is current value of memptr
+        // destination is current value of memptr + 4 (+ 4 so we don't overwrite last chunk's size)
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x04);
+        self.write_opcode(Opcode::I32Add);
         // source address is `offset`
         self.write_opcode(Opcode::LocalGet);
         self.bytes_mut().extend_from_slice(&offset_idx);
@@ -779,20 +783,19 @@ impl Wasmizer {
         self.bytes_mut().extend_from_slice(&size_idx);
         self.bytes_mut().extend_from_slice(&MEMCOPY);
 
-        // increment n allocs
-        *self.current_func_mut().allocs.last_mut().unwrap() += 1;
+        if write_size {
+            // increment n allocs
+            *self.current_func_mut().allocs.last_mut().unwrap() += 1;
+        }
 
-        // set offset to memptr
+        // set offset to memptr + 4 (start of new memory block)
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x04);
+        self.write_opcode(Opcode::I32Add);
         self.write_opcode(Opcode::LocalSet);
         self.bytes_mut().extend_from_slice(&offset_idx);
-
-        // todo: get rid of these
-        // print offset
-        self.print_i32_local(&offset_idx);
-        // print size
-        self.print_i32_local(&size_idx);
 
         // set memptr to memptr + size (+4 if also writing size)
         self.write_opcode(Opcode::GlobalGet);
@@ -876,6 +879,9 @@ impl Wasmizer {
         // copy memory from arrays into consecutive memory
         self.copy_mem(&offset_idx1, &size_idx1, false);
         self.copy_mem(&offset_idx2, &size_idx2, false);
+
+        // increment n allocs
+        *self.current_func_mut().allocs.last_mut().unwrap() += 1;
 
         // write combined size at the end
         // first, increment memptr by 4

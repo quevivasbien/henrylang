@@ -99,12 +99,15 @@ pub fn unsigned_leb128(value: u32) -> Vec<u8> {
     let mut result = Vec::new();
     let mut value = value;
     loop {
+        // take low 7 bits of remaining value
         let mut byte = (value & 0x7f) as u8;
         value >>= 7;
+        // if there is still something remaining, set the top bit to 1
         if value != 0 {
             byte |= 0x80;
         }
         result.push(byte);
+        // if there's nothing left, we're done
         if value == 0 {
             break;
         }
@@ -112,9 +115,24 @@ pub fn unsigned_leb128(value: u32) -> Vec<u8> {
     result
 }
 
-// TODO: I don't think this works correctly.
 pub fn signed_leb128(value: i32) -> Vec<u8> {
-    unsigned_leb128(value as u32)
+    let mut result = Vec::new();
+    let mut more = true;
+    let mut value = value;
+    while more {
+        // take low 7 bits of remaining value
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        // if value is zero and sign bit is 0, we're done
+        // also if value is -1 and sign bit is 1, we're done
+        if (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0) {
+            more = false;
+        } else {
+            byte |= 0x80;
+        }
+        result.push(byte);
+    }
+    result
 }
 
 pub fn encode_string(s: &str) -> Vec<u8> {

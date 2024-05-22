@@ -14,4 +14,4 @@ mod vm;
 pub use ast::Type;
 pub use vm::VM;
 pub use wasmizer::wasmize;
-pub use env::{Env, get_wasmer_imports};
+pub use env::{Env, run_wasm};

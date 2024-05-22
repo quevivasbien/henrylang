@@ -67,3 +67,77 @@ impl Env {
         }
     }
 }
+
+
+fn view_string(memview: wasmer::MemoryView, offset: u64, size: u64) -> Result<String, String> {
+    let mut buf = vec![0u8; size as usize*4];
+    memview.read(offset, &mut buf).map_err(|e| format!("{}", e))?;
+    let out = String::from_utf8(buf).map_err(|e| format!("{}", e))?;
+    #[cfg(feature = "debug")]
+    println!("String: size: {}, out: {:?}", size, out);
+    Ok(out)
+}
+
+fn view_memory(memview: wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<String, String> {
+    let offset = (fatptr >> 32) as u64;
+    let size = (fatptr & 0xffffffff) as u64;
+    let arrtype = match typ {
+        Type::Arr(t) => *t,
+        Type::Str => return view_string(memview, offset, size),
+        _ => return Err(format!("Unexpected type: {:?}", typ)),
+    };
+    let result = match arrtype {
+        Type::Int => {
+            let mut out = Vec::new();
+            for i in (0..size).step_by(4) {
+                let mut bytes = [0u8; 4];
+                memview.read(offset + i, &mut bytes).map_err(|e| format!("{}", e))?;
+                out.push(i32::from_le_bytes(bytes));
+            }
+            format!("{:?}", out)
+        },
+        Type::Float => {
+            let mut out = Vec::new();
+            for i in (0..size).step_by(4) {
+                let mut bytes = [0u8; 4];
+                memview.read(offset + i, &mut bytes).map_err(|e| format!("{}", e))?;
+                out.push(f32::from_le_bytes(bytes));
+            }
+            format!("{:?}", out)
+        },
+        Type::Bool => {
+            let mut out = Vec::new();
+            for i in (0..size).step_by(4) {
+                let mut bytes = [0u8; 4];
+                memview.read(offset + i, &mut bytes).map_err(|e| format!("{}", e))?;
+                out.push(i32::from_le_bytes(bytes) != 0);
+            }
+            format!("{:?}", out)
+        }
+        _ => return Err(format!("Unexpected array type: {:?}", arrtype)),
+    };
+    Ok(result)
+}
+
+pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
+    let mut store = wasmer::Store::default();
+    let module = wasmer::Module::new(&store, bytes).map_err(|e| format!("{}", e))?;
+    let import_object = get_wasmer_imports(&mut store);
+    let instance = wasmer::Instance::new(&mut store, &module, &import_object).map_err(|e| format!("{}", e))?;
+
+    let main = instance.exports.get_function("main").map_err(|e| format!("{}", e))?;
+    let result = main.call(&mut store, &[]).map_err(|e| format!("{}", e))?;
+    let result = match (&result[0], &typ) {
+        (wasmer::Value::I32(i), Type::Int) => format!("{}", i),
+        (wasmer::Value::I32(i), Type::Bool) => format!("{}", *i != 0),
+        (wasmer::Value::F32(f), Type::Float) => format!("{:?}", f),
+        (wasmer::Value::I64(fatptr), _) => {
+            let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
+            let memview = memory.view(&store);
+            view_memory(memview, *fatptr, typ)?
+        }
+        _ => format!("Unexpected result: {:?}", result),
+    };
+
+    Ok(result)
+}
