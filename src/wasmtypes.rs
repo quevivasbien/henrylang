@@ -16,6 +16,7 @@ pub enum SectionType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Numtype {
+    Void = 0x40,
     F32 = 0x7d,
     I64 = 0x7e,
     I32 = 0x7f,
@@ -45,6 +46,8 @@ pub enum ExportType {
 pub enum Opcode {
     Block = 0x02,
     Loop = 0x03,
+    If = 0x04,
+    Else = 0x05,
     End = 0x0b,
     BrIf = 0x0d,
     Call = 0x10,
@@ -65,6 +68,7 @@ pub enum Opcode {
     I32Eq = 0x46,
     I32Ne = 0x47,
     I32LtS = 0x48,
+    I32LtU = 0x49,
     I32GtS = 0x4a,
     I32LeS = 0x4c,
     I32GeS = 0x4e,
