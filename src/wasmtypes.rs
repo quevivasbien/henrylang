@@ -12,6 +12,8 @@ pub enum SectionType {
     Export = 0x07,
     Element = 0x09,
     Code = 0x0a,
+    Data = 0x0b,
+    DataCount = 0x0c,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +73,7 @@ pub enum Opcode {
     I32LtU = 0x49,
     I32GtS = 0x4a,
     I32LeS = 0x4c,
+    I32LeU = 0x4d,
     I32GeS = 0x4e,
     F32Eq = 0x5b,
     F32Ne = 0x5c,
@@ -96,6 +99,7 @@ pub enum Opcode {
     I64ExtendI32U = 0xad,
 }
 
+pub const MEMINIT: [u8; 2] = [0xfc, 0x08];
 pub const MEMCOPY: [u8; 4] = [0xfc, 0x0a, 0x00, 0x00];
 
 
