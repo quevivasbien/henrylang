@@ -1,244 +1,7 @@
-use crate::{ast, compiler::TypeContext, env::Import, parser, scanner};
-use crate::{env, wasmtypes::*};
-
-const MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
-const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
-
-// a value to be exported
-struct Export {
-    name: String,
-    idx: u32,
-    export_type: ExportType,
-}
-
-impl Export {
-    fn new(name: String, idx: u32, export_type: ExportType) -> Self {
-        Self { name, idx, export_type }
-    }
-
-    fn as_export(&self) -> Vec<u8> {
-        let mut result = encode_string(&self.name);
-        result.push(self.export_type as u8);
-        result.append(&mut unsigned_leb128(self.idx));
-        result
-    }
-}
-
-// represents a passive memory segment (not automatically placed in memory)
-struct DataSegment {
-    data: Vec<u8>,
-}
-
-impl DataSegment {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut result = vec![0x01];  // 0x01 is flag for passive segment
-        result.append(&mut unsigned_leb128(self.data.len() as u32));
-        result.extend_from_slice(&self.data);
-
-        result
-    }
-}
-
-struct ModuleBuilder {
-    // stores type signatures for each function
-    functypes: Vec<FuncTypeSignature>,
-    // indices to functypes for each function
-    funcs: Vec<u32>,
-    // bytecode for each function's body - order should match that of funcs
-    func_bodies: Vec<Vec<u8>>,
-    // information about functions, memory, globals, etc. to export
-    exports: Vec<Export>,
-    // passive data segments
-    data_segments: Vec<DataSegment>,
-    // bytecode for each import
-    imports: Vec<Vec<u8>>,
-}
-
-impl Default for ModuleBuilder {
-    fn default() -> Self {
-        let mem_export = Export::new("memory".to_string(), 0, ExportType::Memory);
-        Self {
-            functypes: Vec::new(),
-            funcs: vec![],
-            func_bodies: vec![],
-            exports: vec![mem_export],
-            data_segments: vec![],
-            imports: vec![],
-        }
-    }
-}
-
-impl ModuleBuilder {
-    fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<(), String> {
-        let ftype = self.get_functype_idx(sig);
-        let func_idx = (self.imports.len() + self.funcs.len()) as u32;
-        if func_idx == u32::MAX {
-            return Err(format!("too many functions"));
-        }
-        self.funcs.push(ftype);
-        self.func_bodies.push(function_body(local_types, code));
-        if let Some(name) = export_name {
-            self.exports.push(Export::new(name, func_idx, ExportType::Func));
-        }
-        Ok(())
-    }
-
-    fn add_data(&mut self, data: Vec<u8>) -> Result<u32, String> {
-        // first check if there is already a matching data segment
-        // if so, return its index
-        // if not, add it and return its index
-        match self.data_segments.iter().enumerate()
-            .find_map(|(i, x)| if x.data == data { Some(i) } else { None })
-        {
-            Some(i) => Ok(i as u32),
-            None => {
-                let idx = self.data_segments.len() as u32;
-                if idx == u32::MAX {
-                    return Err(format!("too many data segments"));
-                }
-                self.data_segments.push(DataSegment::new(data));
-                Ok(idx)
-            }
-        }
-    }
-
-    fn add_import(&mut self, import: &Import) {
-        let module = encode_string(import.module);
-        let field = encode_string(import.field);
-        let ftype = unsigned_leb128(self.get_functype_idx(&import.sig));
-        let bytes = [
-            module,
-            field,
-            vec![0x00],
-            ftype,
-        ].concat();
-        self.imports.push(bytes);
-    }
-
-    fn get_functype_idx(&mut self, ftype: &FuncTypeSignature) -> u32 {
-        match self.functypes.iter().enumerate()
-            .find_map(|(i, x)| if x == ftype { Some(i) } else { None })
-        {
-            Some(i) => i as u32,
-            None => {
-                self.functypes.push(ftype.clone());
-                self.functypes.len() as u32 - 1
-            }
-        }
-    }
-
-    fn type_section(&self) -> Vec<u8> {
-        section_from_chunks(
-            SectionType::Type,
-            self.functypes.iter()
-                .map(|x| x.as_functype())
-                .collect::<Vec<_>>()
-                .as_slice()
-        )
-    }
-
-    fn import_section(&self) -> Vec<u8> {
-        section_from_chunks(SectionType::Import, &self.imports)
-    }
-
-    fn func_section(&self) -> Vec<u8> {
-        section_from_values(SectionType::Function, &self.funcs)
-    }
-
-    fn table_section(&self) -> Vec<u8> {
-        let n_funcs = self.funcs.len() as u8;
-        section_from_chunks(SectionType::Table, &[vec![
-            0x70,    // funcref
-            0x00,    // minimum
-            n_funcs  // maximum
-        ]])
-    }
-
-    fn memory_section(&self) -> Vec<u8> {
-        section_from_chunks(
-            SectionType::Memory,
-            &[vec![
-                0x00,  // limit flag
-                0x01,  // initial size
-            ]]
-        )
-    }
-
-    fn global_section(&self) -> Vec<u8> {
-        // for now, just the memptr global
-        section_from_chunks(
-            SectionType::Global,
-            &[vec![
-                Numtype::I32 as u8,  // data type
-                0x01,  // mutability (1 means mutable)
-                Opcode::I32Const as u8,
-                0x00,  // initial value
-                Opcode::End as u8,
-            ]]
-        )
-    }
-
-    fn export_section(&self) -> Vec<u8> {
-        section_from_chunks(
-            SectionType::Export,
-            self.exports.iter()
-                .map(|x| x.as_export())
-                .collect::<Vec<_>>()
-                .as_slice()
-        )
-    }
-
-    fn elem_section(&self) -> Vec<u8> {
-        let segments = (0..self.funcs.len()).map(
-            |i| {
-                [
-                    &[0x00, Opcode::I32Const as u8],
-                    unsigned_leb128(i as u32).as_slice(),
-                    &[Opcode::End as u8, 0x01],
-                    unsigned_leb128((i + self.imports.len()) as u32).as_slice()
-                ].concat()
-            }
-        ).collect::<Vec<_>>();
-        section_from_chunks(SectionType::Element, &segments)
-    }
-
-    fn code_section(&self) -> Vec<u8> {
-        section_from_chunks(SectionType::Code, &self.func_bodies)
-    }
-
-    fn data_section(&self) -> Vec<u8> {
-        let data_chunks = self.data_segments.iter().map(|d| d.to_bytes()).collect::<Vec<_>>();
-        section_from_chunks(SectionType::Data, &data_chunks)
-    }
-
-    fn data_count_section(&self) -> Vec<u8> {
-        let mut bytes = vec![SectionType::DataCount as u8];
-        bytes.append(&mut vector(unsigned_leb128(self.data_segments.len() as u32)));
-        bytes
-    }
-
-    fn program(&self) -> Vec<u8> {
-        [
-            &MAGIC,
-            &VERSION,
-            self.type_section().as_slice(),
-            self.import_section().as_slice(),
-            self.func_section().as_slice(),
-            self.table_section().as_slice(),
-            self.memory_section().as_slice(),
-            self.global_section().as_slice(),
-            self.export_section().as_slice(),
-            self.elem_section().as_slice(),
-            self.data_count_section().as_slice(),  // this needs to come before the code section even though SectionType::DataCount  > SectionType::Code
-            self.code_section().as_slice(),
-            self.data_section().as_slice(),
-        ].concat()
-    }
-}
+use crate::{ast, compiler::TypeContext, parser, scanner};
+use crate::env;
+use super::module_builder::ModuleBuilder;
+use super::wasmtypes::*;
 
 #[derive(Debug)]
 struct Local {
@@ -441,6 +204,29 @@ impl Wasmizer {
         *self.current_func_mut().allocs.last_mut().unwrap() += 1;
     }
 
+    fn align_memptr(&mut self) {
+        // Align memptr to 4 bytes
+        // 3 + memptr
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x03);
+        self.write_opcode(Opcode::I32Add);
+        // (3 + memptr) % 4
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x03);
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x04);
+        self.write_opcode(Opcode::I32RemU);
+        // memptr = 3 + memptr - (3 + memptr) % 4
+        self.write_opcode(Opcode::I32Sub);
+        self.write_opcode(Opcode::GlobalSet);
+        self.write_byte(0x00);
+    }
+
     // for debugging
     #[allow(dead_code)]
     fn print_i32_local(&mut self, local_idx: &[u8]) {
@@ -563,84 +349,7 @@ impl Wasmizer {
                 self.write_byte(if value { 1 } else { 0 });
             }
             ast::Type::Str => {
-                // // string will be stored in source as sequence of i32 constants
-                // // i.e. chunks each of size 4 bytes
-                // let value = value[1..value.len() - 1].to_string();
-                // let chunks = value.as_bytes().chunks(4);
-                // let len = chunks.len();
-                // if len > u16::MAX as usize {
-                //     return Err(format!("string too long: {}", value));
-                // }
-                // for b in chunks.rev() {
-                //     let x = if b.len() == 4 {
-                //         u32::from_le_bytes(b.try_into().unwrap())
-                //     }
-                //     else {
-                //         let padding = &[0; 4][0..(4 - b.len())];
-                //         u32::from_le_bytes([padding, b].concat().as_slice().try_into().unwrap())
-                //     };
-                //     self.write_opcode(Opcode::I32Const);
-                //     self.bytes_mut().append(&mut unsigned_leb128(x));
-                // }
-                // self.write_array(len as u16, &ast::Type::Int)?;
-                let data = encode_string(&value[1..value.len() - 1]);
-                let size = unsigned_leb128(data.len() as u32);
-                let segment_idx = self.builder.add_data(data)?;
-                let offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
-                // destination is memptr + 4
-                self.write_opcode(Opcode::GlobalGet);
-                self.write_byte(0x00);
-                self.write_opcode(Opcode::I32Const);
-                self.write_byte(0x04);
-                self.write_opcode(Opcode::I32Add);
-                self.write_opcode(Opcode::LocalTee);
-                self.write_slice(&offset_idx);  // we'll use this later
-                // offset in source is 0
-                self.write_opcode(Opcode::I32Const);
-                self.write_byte(0x00);
-                // size of memory region is data.len()
-                self.write_opcode(Opcode::I32Const);
-                self.write_slice(&size);
-                // write memory.init
-                self.write_slice(&MEMINIT);
-                self.write_slice(&unsigned_leb128(segment_idx));
-                self.write_byte(0x00);  // idx of memory (always zero)
-
-                // update memptr
-                self.write_opcode(Opcode::GlobalGet);
-                self.write_byte(0x00);
-                self.write_opcode(Opcode::I32Const);
-                self.write_slice(&size);
-                self.write_opcode(Opcode::I32Const);
-                self.write_byte(0x04);
-                self.write_opcode(Opcode::I32Add);
-                self.write_opcode(Opcode::I32Add);
-                self.write_opcode(Opcode::GlobalSet);
-                self.write_byte(0x00);
-
-                // TODO: Align to 4 bytes
-
-                // set alloc size at memptr
-                self.write_opcode(Opcode::GlobalGet);
-                self.write_byte(0x00);
-                self.write_opcode(Opcode::I32Const);
-                self.write_slice(&size);
-                self.write_opcode(Opcode::I32Store);
-                self.write_byte(0x02);  // alignment
-                self.write_byte(0x00);  // offset
-
-                self.increment_n_allocs();
-
-                // return [offset, size]
-                self.write_opcode(Opcode::LocalGet);
-                self.write_slice(&offset_idx);
-                self.write_opcode(Opcode::I64ExtendI32U);
-                self.write_opcode(Opcode::I64Const);
-                self.write_byte(32);
-                self.write_opcode(Opcode::I64Shl);
-                self.write_opcode(Opcode::I64Const);
-                self.write_slice(&size);
-                self.write_opcode(Opcode::I64Add);
+                self.write_string(value)?
             }
             _ => {
                 return Err(format!("unsupported literal of type: {:?}", typ));
@@ -766,7 +475,7 @@ impl Wasmizer {
                 self.write_opcode(Opcode::F32Add);
             },
             ast::Type::Str | ast::Type::Arr(_) => {
-                self.concat_arrays()?;
+                self.concat_heap_objects()?;
             },
             _ => {
                 return Err(format!("Cannot add values of type {:?}", typ));
@@ -945,7 +654,7 @@ impl Wasmizer {
         }
     }
 
-    fn copy_array(&mut self, fatptr_idx: u32) -> Result<(), String> {
+    fn copy_heap_object(&mut self, fatptr_idx: u32) -> Result<(), String> {
         let fatptr_idx = unsigned_leb128(fatptr_idx);
         let offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
         let size_idx = unsigned_leb128(self.locals_mut().add_local(format!("<size>"), Numtype::I32 as u8));
@@ -972,9 +681,9 @@ impl Wasmizer {
         Ok(())
     }
 
-    // concatenate two arrays/strings
-    // the fatptrs indices to the arrays should be the two last things on the stack when calling this
-    fn concat_arrays(&mut self) -> Result<(), String> {
+    // concatenate two heap objects (e.g. arrays, strings)
+    // the fatptrs indices to the objects should be the two last things on the stack when calling this
+    fn concat_heap_objects(&mut self) -> Result<(), String> {
         // declare locals to store fatptrs, then store fatptrs
         let fatptr_idx2 = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr2>"), Numtype::I64 as u8));
         let fatptr_idx1 = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr1>"), Numtype::I64 as u8));
@@ -1003,6 +712,7 @@ impl Wasmizer {
         self.copy_mem(&offset_idx2, &size_idx2, false);
 
         self.increment_n_allocs();
+        self.align_memptr();
 
         // write combined size at the end
         // first, increment memptr by 4
@@ -1014,13 +724,13 @@ impl Wasmizer {
         self.write_opcode(Opcode::GlobalSet);
         self.write_byte(0x00);
         // then write combined size
-        self.write_opcode(Opcode::GlobalGet);
+        self.write_opcode(Opcode::GlobalGet); // destination is memptr
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::GlobalGet); // size is memptr - offset
         self.write_byte(0x00);
         self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx1);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx2);
-        self.write_opcode(Opcode::I32Add);
+        self.write_slice(&offset_idx1);
+        self.write_opcode(Opcode::I32Sub);
         self.write_opcode(Opcode::I32Store);
         self.write_byte(0x02);  // alignment
         self.write_byte(0x00);  // store offset
@@ -1190,6 +900,79 @@ impl Wasmizer {
         Ok(())
     }
 
+    fn write_string(&mut self, value: &str) -> Result<(), String> {
+        let data = value[1..value.len() - 1].as_bytes().to_vec();
+        let size = unsigned_leb128(data.len() as u32);
+        let segment_idx = self.builder.add_data(data)?;
+        let offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
+        // destination is memptr + 4
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x04);
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::LocalTee);
+        self.write_slice(&offset_idx);  // we'll use this later
+        // offset in source is 0
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x00);
+        // size of memory region is data.len()
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&size);
+        // write memory.init
+        self.write_slice(&MEMINIT);
+        self.write_slice(&unsigned_leb128(segment_idx));
+        self.write_byte(0x00);  // idx of memory (always zero)
+
+        // update memptr
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&size);
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0x04);
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::GlobalSet);
+        self.write_byte(0x00);
+
+        self.align_memptr();
+
+        // print memptr
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::Call);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::Drop);
+
+        // set alloc size at memptr
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        // alloc size is memptr - offset
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::LocalGet);
+        self.write_slice(&offset_idx);
+        self.write_opcode(Opcode::I32Sub);
+        self.write_opcode(Opcode::I32Store);
+        self.write_byte(0x02);  // alignment
+        self.write_byte(0x00);  // offset
+
+        self.increment_n_allocs();
+
+        // return [offset, size]
+        self.write_opcode(Opcode::LocalGet);
+        self.write_slice(&offset_idx);
+        self.write_opcode(Opcode::I64ExtendI32U);
+        self.write_opcode(Opcode::I64Const);
+        self.write_byte(32);
+        self.write_opcode(Opcode::I64Shl);
+        self.write_opcode(Opcode::I64Const);
+        self.write_slice(&size);
+        self.write_opcode(Opcode::I64Add);
+        Ok(())
+    }
+
     fn write_to_memory(&mut self, memptr_idx: &[u8], value_idx: &[u8], store_op: Opcode, memsize: u8) -> Result<(), String> {
         // set local var to last value on stack
         self.write_opcode(Opcode::LocalSet);
@@ -1203,9 +986,8 @@ impl Wasmizer {
         self.write_slice(value_idx);
 
         self.write_byte(store_op as u8);
-        // todo: figure out what these two lines do.
-        self.write_byte(0x02);  // alignment?
-        self.write_byte(0x00);
+        self.write_byte(0x02);  // alignment
+        self.write_byte(0x00);  // offset
 
         // increase memptr by memsize
         self.write_opcode(Opcode::LocalGet);
@@ -1277,7 +1059,7 @@ impl Wasmizer {
         
         // if typ is a heap-allocated type, we also need to copy the memory
         if matches!(typ, ast::Type::Arr(_) | ast::Type::Str) {
-            self.copy_array(idx)?;
+            self.copy_heap_object(idx)?;
         }
         self.write_opcode(Opcode::LocalTee);
         self.bytes_mut().append(&mut unsigned_leb128(idx));

@@ -29,8 +29,8 @@ fn test_arrays() {
 
 #[test]
 fn test_strings() {
-    assert_eq!(run("\"Hello, World!\""), "\"Hello, World!\"");
-    assert_eq!(run("a := \"Hello, World!\" a"), "\"Hello, World!\"");
+    assert_eq!(run("\"Hello, World!\""), "Hello, World!");
+    assert_eq!(run("a := \"Hello, World!\" a"), "Hello, World!");
     assert_eq!(run("a := \"Hello, World!\" b := a b = a"), "true");
-    assert_eq!(run("\"Hello, \" + \"World!\""), "\"Hello, World!\"");
+    assert_eq!(run("\"Hello, \" + \"World!\""), run("\"Hello, World!\""));
 }

@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use rustc_hash::FxHashMap;
 
-use crate::{ast::Type, compiler::TypeContext, wasmtypes::{FuncTypeSignature, Numtype}};
+use crate::{ast::Type, compiler::TypeContext, wasmizer::wasmtypes::{FuncTypeSignature, Numtype}};
 
 fn print<T: std::fmt::Display>(x: T) -> T {
     println!("{}", x);
@@ -70,7 +70,7 @@ impl Env {
 
 
 fn view_string(memview: wasmer::MemoryView, offset: u64, size: u64) -> Result<String, String> {
-    let mut buf = vec![0u8; size as usize*4];
+    let mut buf = vec![0u8; size as usize];
     memview.read(offset, &mut buf).map_err(|e| format!("{}", e))?;
     let out = String::from_utf8(buf).map_err(|e| format!("{}", e))?;
     #[cfg(feature = "debug")]

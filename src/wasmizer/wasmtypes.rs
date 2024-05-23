@@ -85,6 +85,7 @@ pub enum Opcode {
     I32Sub = 0x6b,
     I32Mul = 0x6c,
     I32DivS = 0x6d,
+    I32RemU = 0x70,
     I32And = 0x71,
     I32Or = 0x72,
     I64Add = 0x7c,
