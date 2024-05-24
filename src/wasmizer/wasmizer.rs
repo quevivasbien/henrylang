@@ -1,7 +1,9 @@
+use rustc_hash::FxHashMap;
+
 use crate::{ast, compiler::TypeContext, parser, scanner};
 use crate::env;
 use super::module_builder::ModuleBuilder;
-use super::wasmtypes::*;
+use super::{builtin_funcs, wasmtypes::*};
 
 #[derive(Debug)]
 struct Local {
@@ -77,101 +79,37 @@ pub struct Wasmizer {
     pub global_vars: env::GlobalVars,
     builder: ModuleBuilder,
     frames: Vec<WasmFunc>,
+    builtins: FxHashMap<&'static str, u32>,  // name -> func index
 }
 
 impl Wasmizer {
-    fn new(global_env: env::Env) -> Self {
+    fn new(global_env: env::Env) -> Result<Self, String> {
         let mut builder: ModuleBuilder = Default::default();
-        
-        global_env.imports.iter().for_each(
-            |import| {
-                builder.add_import(import);
-            }
-        );
 
-        // add hard-coded memory allocation functions
-        // note: these two functions assume that global[0] is the $memptr
-        // TODO: allow this to grow to more pages and raise error if out of memory
-        let alloc_code = vec![
-            // get memptr + 4 (start of next memory chunk)
-            Opcode::GlobalGet as u8,
-            0x00,  // global index
-            Opcode::I32Const as u8,
-            0x04,  // i32 literal
-            Opcode::I32Add as u8,
-            // save that location as value to return
-            Opcode::LocalSet as u8,
-            0x01,  // local index
-            // calculate end of new memory chunk
-            Opcode::GlobalGet as u8,
-            0x00,  // global index
-            Opcode::LocalGet as u8,
-            0x00,  // local index
-            Opcode::I32Const as u8,
-            0x04,  // i32 literal
-            Opcode::I32Add as u8,
-            Opcode::I32Add as u8,
-            // set that as new value of memptr
-            Opcode::GlobalSet as u8,
-            0x00,  // global index
-            // write size of allocation at end of block
-            Opcode::GlobalGet as u8,
-            0x00,  // global index
-            Opcode::LocalGet as u8,
-            0x00,  // local index
-            Opcode::I32Store as u8,
-            0x02,  // alignment
-            0x00,  // store offset
-            // return the start index of the new memory chunk
-            Opcode::LocalGet as u8,
-            0x01,  // local index
-            // 0x23, 0x00, 0x10, 0x00, 0x1a, // print memptr
-            Opcode::End as u8,
-        ];
-        builder.add_function(
-            &FuncTypeSignature::new(vec![Numtype::I32], Numtype::I32),
-            vec![Numtype::I32 as u8],
-            alloc_code,
-            None
-        ).unwrap();
+        let mut builtins = FxHashMap::default();
+        for import in global_env.imports.iter() {
+            let idx = builder.add_import(import);
+            builtins.insert(import.field, idx);
+        }
 
-        let free_code = vec![
-            // Opcode::I32Const as u8, 0xd8, 0x00, Opcode::Call as u8, 0x00, Opcode::Drop as u8, // print 88
-            // get memptr
-            Opcode::GlobalGet as u8,
-            0x00,  // global index
-            // load size of allocation (stored at *memptr)
-            Opcode::GlobalGet as u8,
-            0x00,  // global index
-            // Opcode::Call as u8, 0x00, // print memptr
-            Opcode::I32Load as u8,
-            0x02,  // alignment
-            0x00,  // load offset
-            // add 4 to size of allocation (since size itself takes 4 bytes)
-            Opcode::I32Const as u8,
-            0x04,  // i32 literal
-            Opcode::I32Add as u8,
-            // Opcode::Call as u8, 0x00, // print dealloc size
-            // subtract allocation size from memptr; set as new memptr value
-            Opcode::I32Sub as u8,
-            Opcode::GlobalSet as u8,
-            0x00,  // global index
-            // Opcode::I32Const as u8, 0xa8, 0x7f, Opcode::Call as u8, 0x00, Opcode::Drop as u8, // print -88
-            Opcode::End as u8,
-        ];
-        builder.add_function(
-            &FuncTypeSignature::default(),
-            vec![],
-            free_code,
-            None
-        ).unwrap();
+        // add hard-coded builtin functions
+        for (&name, func) in builtin_funcs::BUILTINS.iter() {
+            let idx = builder.add_function(
+                func.get_signature(),
+                func.get_local_types(),
+                func.get_bytes().to_vec(),
+                None
+            )?;
+            builtins.insert(name, idx);
+        }
 
-        Self {
+        Ok(Self {
             typecontext: global_env.global_types,
             global_vars: global_env.global_vars,
             builder,
-            frames: vec![]
-        }
+            frames: vec![],
+            builtins
+        })
     }
 
     fn current_func(&self) -> &WasmFunc {
@@ -198,6 +136,16 @@ impl Wasmizer {
     }
     fn write_slice(&mut self, slice: &[u8]) {
         self.bytes_mut().extend_from_slice(slice);
+    }
+
+    fn call_builtin(&mut self, name: &str) -> Result<(), String> {
+        let idx = match self.builtins.get(name) {
+            Some(idx) => *idx,
+            None => return Err(format!("Unknown builtin function: {}", name))
+        };
+        self.write_opcode(Opcode::Call);
+        self.bytes_mut().append(&mut unsigned_leb128(idx));
+        Ok(())
     }
 
     fn increment_n_allocs(&mut self) {
@@ -232,8 +180,7 @@ impl Wasmizer {
     fn print_i32_local(&mut self, local_idx: &[u8]) {
         self.write_opcode(Opcode::LocalGet);
         self.write_slice(&local_idx);
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
+        self.call_builtin("print[Int]").unwrap();
         self.write_opcode(Opcode::Drop);
     }
 
@@ -243,10 +190,8 @@ impl Wasmizer {
         // print 8888 twice to show that this is what's going on
         self.write_opcode(Opcode::I32Const);
         self.write_slice(&signed_leb128(8888));
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
+        self.call_builtin("print[Int]").unwrap();
+        self.call_builtin("print[Int]").unwrap();
         self.write_opcode(Opcode::Drop);
 
         let counter_idx = unsigned_leb128(self.locals_mut().add_local(format!("<counter>"), Numtype::I32 as u8));
@@ -268,8 +213,7 @@ impl Wasmizer {
         self.write_byte(0x00);  // load offset
 
         // print it
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
+        self.call_builtin("print[Int]").unwrap();
         self.write_opcode(Opcode::Drop);
 
         // add 4 to counter
@@ -292,21 +236,19 @@ impl Wasmizer {
         // print -8888 twice to show that we're done
         self.write_opcode(Opcode::I32Const);
         self.write_slice(&signed_leb128(-8888));
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
+        self.call_builtin("print[Int]").unwrap();
+        self.call_builtin("print[Int]").unwrap();
         self.write_opcode(Opcode::Drop);
     }
 
     pub fn init_func(&mut self, name: String, argtypes: &[ast::Type], rettype: &ast::Type, export: bool) -> Result<(), String> {
         let args = argtypes.iter().map(|t| Numtype::from_ast_type(t)).collect::<Result<Vec<_>, _>>()?;
         let ret = Numtype::from_ast_type(rettype)?;
-        let func = WasmFunc::new(name, FuncTypeSignature::new(args, ret), export);
+        let func = WasmFunc::new(name, FuncTypeSignature::new(args, Some(ret)), export);
         self.frames.push(func);
         Ok(())
     }
-    pub fn finish_func(&mut self) -> Result<(), String> {
+    pub fn finish_func(&mut self) -> Result<u32, String> {
         self.current_func_mut().bytes.push(Opcode::End as u8);
         let export_name = if self.current_func().export {
             Some(self.current_func().name.clone())
@@ -597,86 +539,10 @@ impl Wasmizer {
         self.write_slice(size_idx);  // set as size
     }
 
-    // copy size bytes from offset to memptr
-    // sets offset to value of memptr, then increments memptr by size
-    // if write_size is true, write the size of the allocation at the end of the block
-    fn copy_mem(&mut self, offset_idx: &[u8], size_idx: &[u8], write_size: bool) {
-        // destination is current value of memptr + 4 (+ 4 so we don't overwrite last chunk's size)
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x04);
-        self.write_opcode(Opcode::I32Add);
-        // source address is `offset`
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset_idx);
-        // copy `size` bytes
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx);
-        self.write_slice(&MEMCOPY);
-
-        if write_size {
-            self.increment_n_allocs();
-        }
-
-        // set offset to memptr + 4 (start of new memory block)
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x04);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&offset_idx);
-
-        // set memptr to memptr + size (+4 if also writing size)
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx);
-        if write_size {
-            self.write_opcode(Opcode::I32Const);
-            self.write_byte(0x04);
-            self.write_opcode(Opcode::I32Add);
-        }
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::GlobalSet);
-        self.write_byte(0x00);
-
-        // if writing size at end of block, do that here
-        if write_size {
-            self.write_opcode(Opcode::GlobalGet);
-            self.write_byte(0x00);
-            self.write_opcode(Opcode::LocalGet);
-            self.write_slice(&size_idx);
-            self.write_opcode(Opcode::I32Store);
-            self.write_byte(0x02);  // alignment
-            self.write_byte(0x00);  // store offset
-        }
-    }
-
-    fn copy_heap_object(&mut self, fatptr_idx: u32) -> Result<(), String> {
-        let fatptr_idx = unsigned_leb128(fatptr_idx);
-        let offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
-        let size_idx = unsigned_leb128(self.locals_mut().add_local(format!("<size>"), Numtype::I32 as u8));
-
-        // sets fatptr, then sets offset and size from fatptr
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&fatptr_idx);  // get fatptr
-        self.set_offset_and_size(&fatptr_idx, &offset_idx, &size_idx);
-
-        self.copy_mem(&offset_idx, &size_idx, true);
-
-        // return [offset, size]
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset_idx);
-        self.write_opcode(Opcode::I64ExtendI32U);
-        self.write_opcode(Opcode::I64Const);
-        self.write_byte(32);
-        self.write_opcode(Opcode::I64Shl);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx);
-        self.write_opcode(Opcode::I64ExtendI32U);
-        self.write_opcode(Opcode::I64Add);
+    // assumes fatptr to object to copy is last thing on stack
+    fn copy_heap_object(&mut self) -> Result<(), String> {
+        self.call_builtin("copy_heap_obj")?;
+        self.increment_n_allocs();
 
         Ok(())
     }
@@ -684,71 +550,8 @@ impl Wasmizer {
     // concatenate two heap objects (e.g. arrays, strings)
     // the fatptrs indices to the objects should be the two last things on the stack when calling this
     fn concat_heap_objects(&mut self) -> Result<(), String> {
-        // declare locals to store fatptrs, then store fatptrs
-        let fatptr_idx2 = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr2>"), Numtype::I64 as u8));
-        let fatptr_idx1 = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr1>"), Numtype::I64 as u8));
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&fatptr_idx2);
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&fatptr_idx1);
-
-        // declare locals to store offsets and sizes
-        let offset_idx2 = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
-        let size_idx2 = unsigned_leb128(self.locals_mut().add_local(format!("<size>"), Numtype::I32 as u8));
-        
-        let offset_idx1 = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
-        let size_idx1 = unsigned_leb128(self.locals_mut().add_local(format!("<size>"), Numtype::I32 as u8));
-
-        // set offset and size for each array
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&fatptr_idx2);
-        self.set_offset_and_size(&fatptr_idx2, &offset_idx2, &size_idx2);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&fatptr_idx1);
-        self.set_offset_and_size(&fatptr_idx1, &offset_idx1, &size_idx1);
-
-        // copy memory from arrays into consecutive memory
-        self.copy_mem(&offset_idx1, &size_idx1, false);
-        self.copy_mem(&offset_idx2, &size_idx2, false);
-
+        self.call_builtin("concat_heap_objs")?;
         self.increment_n_allocs();
-        self.align_memptr();
-
-        // write combined size at the end
-        // first, increment memptr by 4
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(4);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::GlobalSet);
-        self.write_byte(0x00);
-        // then write combined size
-        self.write_opcode(Opcode::GlobalGet); // destination is memptr
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::GlobalGet); // size is memptr - offset
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset_idx1);
-        self.write_opcode(Opcode::I32Sub);
-        self.write_opcode(Opcode::I32Store);
-        self.write_byte(0x02);  // alignment
-        self.write_byte(0x00);  // store offset
-
-        // return [offset1, size1 + size2]
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset_idx1);
-        self.write_opcode(Opcode::I64ExtendI32U);
-        self.write_opcode(Opcode::I64Const);
-        self.write_byte(32);
-        self.write_opcode(Opcode::I64Shl);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx1);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size_idx2);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::I64ExtendI32U);
-        self.write_opcode(Opcode::I64Add);
         Ok(())
     }
 
@@ -866,9 +669,7 @@ impl Wasmizer {
         // call alloc
         self.write_opcode(Opcode::I32Const);
         self.bytes_mut().append(&mut unsigned_leb128(len as u32 * memsize as u32));
-        self.write_opcode(Opcode::Call);
-        let alloc_func_idx = self.builder.imports.len() as u8;
-        self.write_byte(alloc_func_idx);
+        self.call_builtin("alloc")?;
         self.increment_n_allocs();
         // alloc will return index of start pos -- set startptr and memptr to that index
         self.write_opcode(Opcode::LocalTee);
@@ -938,13 +739,6 @@ impl Wasmizer {
 
         self.align_memptr();
 
-        // print memptr
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::Call);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::Drop);
-
         // set alloc size at memptr
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
@@ -1003,11 +797,18 @@ impl Wasmizer {
 
     fn free_multiple(&mut self, n_frees: u32) -> Result<(), String> {
         #[cfg(feature = "debug")]
-        self.print_mem();
+        {
+            self.print_mem();
+        }
+
         // call free
         let mut bytes = Vec::with_capacity(2);
+        let free_idx = match self.builtins.get("free") {
+            Some(idx) => unsigned_leb128(*idx),
+            None => return Err("Could not find 'free' builtin function".to_string()),
+        };
         bytes.push(Opcode::Call as u8);
-        bytes.append(&mut unsigned_leb128(self.builder.imports.len() as u32 + 1));
+        bytes.extend_from_slice(&free_idx);
         self.repeat(&bytes, n_frees)
     }
 
@@ -1059,7 +860,7 @@ impl Wasmizer {
         
         // if typ is a heap-allocated type, we also need to copy the memory
         if matches!(typ, ast::Type::Arr(_) | ast::Type::Str) {
-            self.copy_heap_object(idx)?;
+            self.copy_heap_object()?;
         }
         self.write_opcode(Opcode::LocalTee);
         self.bytes_mut().append(&mut unsigned_leb128(idx));
@@ -1121,7 +922,7 @@ pub fn wasmize(source: String, global_env: env::Env) -> Result<(Vec<u8>, ast::Ty
     let ast = parser::parse(tokens, global_env.global_types.clone()).map_err(|_| "Compilation halted due to parsing error.")?;
     #[cfg(feature = "debug")]
     println!("{:?}", ast);
-    let mut wasmizer = Wasmizer::new(global_env);
+    let mut wasmizer = Wasmizer::new(global_env)?;
     ast.wasmize(&mut wasmizer)?;
     let return_type = ast.get_type()?;
 

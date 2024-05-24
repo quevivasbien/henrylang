@@ -207,8 +207,8 @@ impl Default for FuncTypeSignature {
 }
 
 impl FuncTypeSignature {
-    pub fn new(args: Vec<Numtype>, ret: Numtype) -> Self {
-        Self { args, ret: Some(ret) }
+    pub fn new(args: Vec<Numtype>, ret: Option<Numtype>) -> Self {
+        Self { args, ret }
     }
     pub fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         let (args, ret) = match typ {
@@ -217,7 +217,7 @@ impl FuncTypeSignature {
         };
         let args = args.iter().map(|x| Numtype::from_ast_type(x)).collect::<Result<_, _>>()?;
         let ret = Numtype::from_ast_type(ret)?;
-        Ok(Self::new(args, ret))
+        Ok(Self::new(args, Some(ret)))
     }
     // get byte representation
     pub fn as_functype(&self) -> Vec<u8> {

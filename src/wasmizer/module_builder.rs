@@ -74,7 +74,8 @@ impl Default for ModuleBuilder {
 }
 
 impl ModuleBuilder {
-    pub fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<(), String> {
+    // adds a function definition, returns the function index
+    pub fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<u32, String> {
         let ftype = self.get_functype_idx(sig);
         let func_idx = (self.imports.len() + self.funcs.len()) as u32;
         if func_idx == u32::MAX {
@@ -85,7 +86,7 @@ impl ModuleBuilder {
         if let Some(name) = export_name {
             self.exports.push(Export::new(name, func_idx, ExportType::Func));
         }
-        Ok(())
+        Ok(func_idx)
     }
 
     pub fn add_data(&mut self, data: Vec<u8>) -> Result<u32, String> {
@@ -107,7 +108,7 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn add_import(&mut self, import: &Import) {
+    pub fn add_import(&mut self, import: &Import) -> u32 {
         let module = encode_string(import.module);
         let field = encode_string(import.field);
         let ftype = unsigned_leb128(self.get_functype_idx(&import.sig));
@@ -118,6 +119,7 @@ impl ModuleBuilder {
             ftype,
         ].concat();
         self.imports.push(bytes);
+        self.imports.len() as u32 - 1
     }
 
     pub fn get_functype_idx(&mut self, ftype: &FuncTypeSignature) -> u32 {

@@ -57,8 +57,8 @@ impl Default for Env {
 impl Env {
     pub fn new(global_vars: GlobalVars, global_types: TypeContext) -> Self {
         let imports = vec![
-            Import::new("env", "print[Int]", FuncTypeSignature::new(vec![Numtype::I32], Numtype::I32)),
-            Import::new("env", "print[Float]", FuncTypeSignature::new(vec![Numtype::F32], Numtype::F32)),
+            Import::new("env", "print[Int]", FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32))),
+            Import::new("env", "print[Float]", FuncTypeSignature::new(vec![Numtype::F32], Some(Numtype::F32))),
         ];
         Self {
             global_vars,
