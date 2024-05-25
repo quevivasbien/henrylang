@@ -722,10 +722,11 @@ impl Parser {
         let then_branch = self.block();
         let else_branch = if self.consume_if_match(TokenType::Else) {
             self.consume(TokenType::LBrace, "Expected '{' after 'else'.".to_string());
-            Some(self.block())
+            self.block()
         }
         else {
-            None
+            self.error(Some(format!("Expected 'else' after 'if'.")));
+            return Box::new(ast::ErrorExpression{});
         };
         Box::new(ast::IfStatement::new(condition, then_branch, else_branch))
     }

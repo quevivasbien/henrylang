@@ -522,23 +522,6 @@ impl Wasmizer {
         Ok(())
     }
 
-    // sets offset = fatptr >> 32 and size = fatptr & 0xFFFFFFFF
-    // assumes fatptr is last thing on stack before call
-    fn set_offset_and_size(&mut self, fatptr_idx: &[u8], offset_idx: &[u8], size_idx: &[u8]) {
-        self.write_opcode(Opcode::I64Const);
-        self.write_byte(0x20);
-        self.write_opcode(Opcode::I64ShrU);  // shift right 32 bits
-        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(offset_idx);  // set as offset
-        // size = lowest 32 bits of fatptr
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(fatptr_idx);
-        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(size_idx);  // set as size
-    }
-
     // assumes fatptr to object to copy is last thing on stack
     fn copy_heap_object(&mut self) -> Result<(), String> {
         self.call_builtin("copy_heap_obj")?;
@@ -558,101 +541,7 @@ impl Wasmizer {
     // check if two arrays or strings are equal
     // expects two previous values on the stack to be both i64 fatptrs
     fn arrays_equal(&mut self) -> Result<(), String> {
-        let fatptr1_idx = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr1>"), Numtype::I64 as u8));
-        let offset1_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset1>"), Numtype::I32 as u8));
-        let size1_idx = unsigned_leb128(self.locals_mut().add_local(format!("<size1>"), Numtype::I32 as u8));
-
-        let fatptr2_idx = unsigned_leb128(self.locals_mut().add_local(format!("<fatptr2>"), Numtype::I64 as u8));
-        let offset2_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset2>"), Numtype::I32 as u8));
-        let size2_idx = unsigned_leb128(self.locals_mut().add_local(format!("<size2>"), Numtype::I32 as u8));
-
-        // set offsets and sizes from fatptrs
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&fatptr2_idx);
-        self.set_offset_and_size(&fatptr2_idx, &offset2_idx, &size2_idx);
-        
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&fatptr1_idx);
-        self.set_offset_and_size(&fatptr1_idx, &offset1_idx, &size1_idx);
-
-        // check if sizes are equal
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size1_idx);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size2_idx);
-        self.write_opcode(Opcode::I32Eq);
-        self.write_opcode(Opcode::If);
-        self.write_byte(Numtype::I32 as u8); // will return 1 if equal, 0 if not
-
-        // case if sizes are equal
-        // loop through all values and check if they are equal
-        // <inner_offset> is used to store the index of the current value within the loop
-        let inner_offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<loop>"), Numtype::I32 as u8));
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&inner_offset_idx);
-        // <equal> is used to store whether the values are equal, initialized to 1
-        let equal_idx = unsigned_leb128(self.locals_mut().add_local(format!("<equal>"), Numtype::I32 as u8));
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x01);
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&equal_idx);
-        self.write_opcode(Opcode::Loop);
-        self.write_byte(Numtype::Void as u8);
-        // read value from memory at offset1 + inner_offset
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&inner_offset_idx);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset1_idx);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::I32Load);
-        self.write_byte(0x02);  // alignment
-        self.write_byte(0x00);  // load offset
-        // read value from memory at offset2 + inner_offset
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&inner_offset_idx);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset2_idx);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::I32Load);
-        self.write_byte(0x02);  // alignment
-        self.write_byte(0x00);  // load offset
-        // compare values, update equal, keep that value on stack
-        self.write_opcode(Opcode::I32Eq);
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&equal_idx);
-        // add 4 to inner_offset
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&inner_offset_idx);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x04);
-        self.write_opcode(Opcode::I32Add);
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&inner_offset_idx);
-        // check if inner_offset < size1
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&size1_idx);
-        self.write_opcode(Opcode::I32LtU);
-        // continue if inner_offset < size1 AND equal == 1
-        self.write_opcode(Opcode::I32And);
-        self.write_opcode(Opcode::BrIf);
-        self.write_byte(0x00);  // break depth
-        self.write_opcode(Opcode::End); // end loop
-        // return <equal>
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&equal_idx);
-
-
-        self.write_opcode(Opcode::Else);
-        // case if sizes are not equal
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0);
-
-
-        self.write_opcode(Opcode::End); // end if
-
-        Ok(())
+        self.call_builtin("heap_objs_equal")
     }
 
     pub fn write_array(&mut self, len: u16, typ: &ast::Type) -> Result<(), String> {
@@ -909,6 +798,21 @@ impl Wasmizer {
         };
         self.write_opcode(Opcode::Call);
         self.write_byte(fn_idx);
+        Ok(())
+    }
+
+    pub fn write_if(&mut self, typ: &ast::Type) -> Result<(), String> {
+        self.write_opcode(Opcode::If);
+        self.write_byte(Numtype::from_ast_type(typ)? as u8);
+        Ok(())
+    }
+    pub fn write_else(&mut self) -> Result<(), String> {
+        self.write_opcode(Opcode::Else);
+        Ok(())
+    }
+
+    pub fn write_end(&mut self) -> Result<(), String> {
+        self.write_opcode(Opcode::End);
         Ok(())
     }
 

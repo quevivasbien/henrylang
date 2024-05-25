@@ -353,6 +353,103 @@ lazy_static! {
         };
         map.insert("concat_heap_objs", concat_heap_objs);
 
+        let heap_objs_equal = {
+            let mut func = BuiltinFunc::new(
+                FuncTypeSignature::new(vec![Numtype::I64, Numtype::I64], Some(Numtype::I32)),
+                vec!["fatptr1", "fatptr2"]
+            );
+
+            func.add_local("offset1", Numtype::I32);
+            func.add_local("size1", Numtype::I32);
+            func.add_local("offset2", Numtype::I32);
+            func.add_local("size2", Numtype::I32);
+
+            func.set_offset_and_size("fatptr1", "offset1", "size1");
+            func.set_offset_and_size("fatptr2", "offset2", "size2");
+
+            // check if sizes are equal
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("size1");
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("size2");
+            func.write_opcode(Opcode::I32Eq);
+            func.write_opcode(Opcode::If);
+            func.write_byte(Numtype::I32 as u8);  // will be 1 if equal, 0 if not
+
+            // case if sizes are equal
+            // loop through all values and check if they are equal
+            // <inner_offset> is used to store the index of the current value within the loop
+            func.add_local("inner_offset", Numtype::I32);
+            func.write_opcode(Opcode::I32Const);
+            func.write_byte(0x00);
+            func.write_opcode(Opcode::LocalSet);
+            func.write_var("inner_offset");
+            // <equal> is used to store whether the values are equal, initialized to 1
+            func.add_local("equal", Numtype::I32);
+            func.write_opcode(Opcode::I32Const);
+            func.write_byte(0x01);
+            func.write_opcode(Opcode::LocalSet);
+            func.write_var("equal");
+            func.write_opcode(Opcode::Loop);
+            func.write_byte(Numtype::Void as u8);
+            // read value from memory at offset1 + inner_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("inner_offset");
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("offset1");
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::I32Load);
+            func.write_byte(0x02);  // alignment
+            func.write_byte(0x00);  // load offset
+            // read value from memory at offset2 + inner_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("inner_offset");
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("offset2");
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::I32Load);
+            func.write_byte(0x02);  // alignment
+            func.write_byte(0x00);  // load offset
+            // compare values, update equal, keep that value on stack
+            func.write_opcode(Opcode::I32Eq);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("equal");
+            // add 4 to inner_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("inner_offset");
+            func.write_opcode(Opcode::I32Const);
+            func.write_byte(0x04);
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("inner_offset");
+            // check if inner_offset < size1
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("size1");
+            func.write_opcode(Opcode::I32LtU);
+            // continue if inner_offset < size1 AND equal == 1
+            func.write_opcode(Opcode::I32And);
+            func.write_opcode(Opcode::BrIf);
+            func.write_byte(0x00);  // break depth
+            func.write_opcode(Opcode::End); // end loop
+            // return <equal>
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("equal");
+
+
+            func.write_opcode(Opcode::Else);
+            // case if sizes are not equal
+            func.write_opcode(Opcode::I32Const);
+            func.write_byte(0);
+
+
+            func.write_opcode(Opcode::End); // end if
+
+            func.write_opcode(Opcode::End); // end function
+
+            func
+        };
+        map.insert("heap_objs_equal", heap_objs_equal);
+
         map
     };
 }

@@ -40,6 +40,14 @@ fn test_strings() {
 }
 
 #[test]
+fn test_if_statement() {
+    assert_eq!(run("if true { 1 } else { 0 }"), "1");
+    assert_eq!(run("if false { 1 } else { 0 }"), "0");
+    assert_eq!(run("if 1 = 1 { 1 } else { 0 }"), "1");
+    assert_eq!(run("if { x := 1 x > 0 } { 1 } else { 0 }"), "1");
+}
+
+#[test]
 fn test_functions() {
     assert_eq!(run("f := |x: Int| { x + 1 } f(1)"), "2");
     assert_eq!(run("f := |x: Float| { x + 1.0 } f(1.0)"), "2.0");

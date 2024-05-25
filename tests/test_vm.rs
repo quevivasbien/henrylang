@@ -174,7 +174,10 @@ fn test_maybe() {
     let source = "
     null_if_negative := |x: Int| {
         if x > 0 {
-            x
+            some(x)
+        }
+        else {
+            {}:Int
         }
     }
     
