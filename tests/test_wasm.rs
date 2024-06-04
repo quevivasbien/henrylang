@@ -29,6 +29,7 @@ fn test_arrays() {
     assert_eq!(run("[1, 2, 3] + [4, 5, 6]"), "[1, 2, 3, 4, 5, 6]");
     assert_eq!(run("a := [1, 2, 3] a(1)"), "2");
     assert_eq!(run("a := [\"hello\", \"world\"] a(1)"), "world");
+    assert_eq!(run("a := [[1,2], [3]] a(0) + a(1)"), "[1, 2, 3]");
 }
 
 #[test]

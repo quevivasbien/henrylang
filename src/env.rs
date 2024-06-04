@@ -148,8 +148,17 @@ fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<S
             }
             format!("{:?}", out)
         }
-        // TODO: Handle nested array types
-        _ => return Err(format!("Unexpected array type: {:?}", arrtype)),
+        // Handle nested heap types
+        _ => {
+            let mut str_comps = Vec::new();
+            for i in (0..size).step_by(8) {
+                let mut bytes = [0u8; 8];
+                memview.read(offset + i, &mut bytes).map_err(|e| format!("{}", e))?;
+                let fatptr = i64::from_le_bytes(bytes);
+                str_comps.push(format!("{}", view_memory(memview, fatptr, arrtype.clone())?));
+            }
+            format!("[{}]", str_comps.join(", "))
+        }
     };
     Ok(result)
 }

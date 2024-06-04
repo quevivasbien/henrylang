@@ -554,13 +554,11 @@ impl Wasmizer {
         let value_idx = unsigned_leb128(self.locals_mut().add_local(format!("<value>"), Numtype::from_ast_type(typ)? as u8));
         
         // determine the bytes per value needed
-        let memsize = match typ {
-            ast::Type::Int | ast::Type::Bool | ast::Type::Float => 4,
-            _ => return Err(format!("cannot allocate memory for array of type {:?}", typ))
-        } as u8;
+        let numtype = Numtype::from_ast_type(typ)?;
+        let memsize = numtype.size();
         // call alloc
         self.write_opcode(Opcode::I32Const);
-        self.bytes_mut().append(&mut unsigned_leb128(len as u32 * memsize as u32));
+        self.bytes_mut().append(&mut unsigned_leb128(len as u32 * memsize));
         self.call_builtin("alloc")?;
         self.increment_n_allocs();
         // alloc will return index of start pos -- set startptr and memptr to that index
@@ -571,13 +569,14 @@ impl Wasmizer {
 
         // write vars on stack to memory
         // figure out what opcode to use to store values in memory
-        let store_op = match typ {
-            ast::Type::Int | ast::Type::Bool => Opcode::I32Store,
-            ast::Type::Float => Opcode::F32Store,
-            _ => unreachable!("Should have been filtered out at beginning of function")
+        let store_op = match numtype {
+            Numtype::I32 => Opcode::I32Store,
+            Numtype::F32 => Opcode::F32Store,
+            _ => Opcode::I64Store,
         };
+        // TODO: If values are heap types, they need to be copied here
         for _ in 0..len {
-            self.write_to_memory(&memptr_idx, &value_idx, store_op, memsize)?;
+            self.write_to_memory(&memptr_idx, &value_idx, store_op, memsize as u8)?;
         }
 
         // return [startptr len]
@@ -588,7 +587,7 @@ impl Wasmizer {
         self.write_byte(32);
         self.write_opcode(Opcode::I64Shl);
         self.write_opcode(Opcode::I64Const);
-        self.bytes_mut().append(&mut unsigned_leb128(len as u32 * 4));  // multiply by 4 since 4 bytes per 32-bit value
+        self.bytes_mut().append(&mut unsigned_leb128(len as u32 * memsize));
         self.write_opcode(Opcode::I64Add);
         Ok(())
     }
@@ -878,6 +877,7 @@ impl Wasmizer {
         func.write_slice(&alloc_idx);
         func.write_opcode(Opcode::LocalSet);
         func.write_var("<offset>");
+        // TODO: n_allocs needs to be incremented whenever this constructor is called
 
         // write variables to memory
         for (name, field) in struct_def.fields.iter() {
