@@ -2,8 +2,9 @@ use rustc_hash::FxHashMap;
 
 use crate::{ast, compiler::TypeContext, parser, scanner};
 use crate::env;
+use super::builtin_funcs::BuiltinFunc;
 use super::module_builder::ModuleBuilder;
-use super::{builtin_funcs, wasmtypes::*};
+use super::{builtin_funcs, structs::Struct, wasmtypes::*};
 
 #[derive(Debug)]
 struct Local {
@@ -79,7 +80,8 @@ pub struct Wasmizer {
     pub global_vars: env::GlobalVars,
     builder: ModuleBuilder,
     frames: Vec<WasmFunc>,
-    builtins: FxHashMap<&'static str, u32>,  // name -> func index
+    builtins: FxHashMap<String, u32>,  // name -> func index
+    structs: FxHashMap<String, Struct>,
 }
 
 impl Wasmizer {
@@ -89,18 +91,18 @@ impl Wasmizer {
         let mut builtins = FxHashMap::default();
         for import in global_env.imports.iter() {
             let idx = builder.add_import(import);
-            builtins.insert(import.field, idx);
+            builtins.insert(import.field.to_string(), idx);
         }
 
         // add hard-coded builtin functions
-        for (&name, func) in builtin_funcs::BUILTINS.iter() {
+        for (name, func) in builtin_funcs::BUILTINS.iter() {
             let idx = builder.add_function(
                 func.get_signature(),
                 func.get_local_types(),
                 func.get_bytes().to_vec(),
                 None
             )?;
-            builtins.insert(name, idx);
+            builtins.insert(name.to_string(), idx);
         }
 
         Ok(Self {
@@ -108,7 +110,8 @@ impl Wasmizer {
             global_vars: global_env.global_vars,
             builder,
             frames: vec![],
-            builtins
+            builtins,
+            structs: FxHashMap::default(),
         })
     }
 
@@ -748,7 +751,7 @@ impl Wasmizer {
         let idx = idx + self.current_func().n_params();
         
         // if typ is a heap-allocated type, we also need to copy the memory
-        if matches!(typ, ast::Type::Arr(_) | ast::Type::Str) {
+        if Numtype::from_ast_type(typ)? == Numtype::I64 {
             self.copy_heap_object()?;
         }
         self.write_opcode(Opcode::LocalTee);
@@ -813,6 +816,92 @@ impl Wasmizer {
 
     pub fn write_end(&mut self) -> Result<(), String> {
         self.write_opcode(Opcode::End);
+        Ok(())
+    }
+
+    // take a struct definition and creates a constructor for that struct
+    // adds struct to Wasmizer's list of struct definitions
+    // adds struct constructor idx to stack
+    pub fn create_struct(&mut self, struct_name: String, struct_def: Struct) -> Result<(), String> {
+        let mut fieldnames = Vec::with_capacity(struct_def.fields.len());
+        let mut fieldtypes = Vec::with_capacity(struct_def.fields.len());
+        for (name, field) in struct_def.fields.iter() {
+            fieldnames.push(name.clone());
+            fieldtypes.push(field.nt);
+        }
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(fieldtypes, Some(Numtype::I64)),
+            fieldnames,
+        );
+
+        // copy memory for all the heap fields
+        let copy_idx = unsigned_leb128(*self.builtins.get("copy_heap_obj").unwrap());
+        for (name, field) in struct_def.fields.iter() {
+            if !field.t.is_heap() || field.nt != Numtype::I64 {
+                continue;
+            }
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var(name);
+            func.write_opcode(Opcode::Call);
+            func.write_slice(&copy_idx);
+            func.write_opcode(Opcode::LocalSet);
+            func.write_var(name);
+        }
+
+        func.add_local("<offset>", Numtype::I32);
+        func.add_local("<size>", Numtype::I32);
+        // allocate memory for the struct
+        let alloc_idx = unsigned_leb128(*self.builtins.get("alloc").unwrap());
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(struct_def.size));
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("<size>");
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&alloc_idx);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("<offset>");
+
+        // write variables to memory
+        for (name, field) in struct_def.fields.iter() {
+            // set *(offset + field.offset) = value of name
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("<offset>");
+            func.write_opcode(Opcode::I32Const);
+            func.write_slice(&unsigned_leb128(field.offset));
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var(name);
+            let store_op = match field.nt {
+                Numtype::I32 => Opcode::I32Store,
+                Numtype::F32 => Opcode::F32Store,
+                // Numtype::I64 => Opcode::I64Store, // TODO!
+                _ => unreachable!("Other numtypes should not be possible here"),
+            };
+            func.write_opcode(store_op);
+            func.write_byte(0x02);
+            func.write_byte(0x00);
+        }
+
+        // return fatptr
+        func.create_fatptr("<offset>", "<size>");
+
+        func.write_opcode(Opcode::End);
+
+        // add to list of builtin functions
+        let idx = self.builder.add_function(
+            func.get_signature(),
+            func.get_local_types(),
+            func.get_bytes().to_vec(),
+            None
+        )?;
+        self.builtins.insert(struct_name.clone(), idx);
+
+        // add to definitions
+        self.structs.insert(struct_name, struct_def);
+       
+        // add constructor to stack
+        self.write_last_func_index();
+
         Ok(())
     }
 

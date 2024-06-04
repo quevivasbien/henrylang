@@ -54,3 +54,8 @@ fn test_functions() {
     assert_eq!(run("f := |x: Int, y: Int| { x + y } f(1, 2)"), "3");
     // todo: add more tests here
 }
+
+#[test]
+fn test_objects() {
+    assert_eq!(run("MyType := type { c: Bool, a:Int b: Float } MyType(true, 152, 16.2)"), "MyType { c: true, a: 152, b: 16.2 }");
+}

@@ -78,12 +78,41 @@ fn view_string(memview: wasmer::MemoryView, offset: u64, size: u64) -> Result<St
     Ok(out)
 }
 
+fn view_object(memview: wasmer::MemoryView, offset: u64, size: u64, name: String, fields: Vec<(String, Type)>) -> Result<String, String> {
+    let mut buf = vec![0u8; size as usize];
+    memview.read(offset, &mut buf).map_err(|e| format!("{}", e))?;
+    let mut str_comps = Vec::with_capacity(fields.len());
+    let mut offset = 0;
+    for (name, typ) in fields.into_iter() {
+        match typ {
+            Type::Bool => {
+                let value = i32::from_le_bytes(buf[offset..offset+4].try_into().unwrap()) != 0;
+                offset += 4;
+                str_comps.push(format!("{}: {}", name, value));
+            },
+            Type::Int => {
+                let value = i32::from_le_bytes(buf[offset..offset+4].try_into().unwrap());
+                offset += 4;
+                str_comps.push(format!("{}: {}", name, value));
+            },
+            Type::Float => {
+                let value = f32::from_le_bytes(buf[offset..offset+4].try_into().unwrap());
+                offset += 4;
+                str_comps.push(format!("{}: {:?}", name, value));
+            }
+            _ => return Err(format!("view_object not implemented for type {:?}", typ))
+        }
+    }
+    Ok(format!("{} {{ {} }}", name, str_comps.join(", ")))
+}
+
 fn view_memory(memview: wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<String, String> {
     let offset = (fatptr >> 32) as u64;
     let size = (fatptr & 0xffffffff) as u64;
     let arrtype = match typ {
         Type::Arr(t) => *t,
         Type::Str => return view_string(memview, offset, size),
+        Type::Object(name, fields) => return view_object(memview, offset, size, name, fields),
         _ => return Err(format!("Unexpected type: {:?}", typ)),
     };
     let result = match arrtype {
@@ -114,6 +143,7 @@ fn view_memory(memview: wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<St
             }
             format!("{:?}", out)
         }
+        // TODO: Handle nested array types
         _ => return Err(format!("Unexpected array type: {:?}", arrtype)),
     };
     Ok(result)
@@ -135,6 +165,13 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
             let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
             let memview = memory.view(&store);
             view_memory(memview, *fatptr, typ)?
+        }
+        (wasmer::Value::I32(_), Type::TypeDef(_, t)) => {
+            let typename = match t.as_ref() {
+                Type::Object(name, _) => name,
+                _ => unreachable!()
+            };
+            format!("<constructor for type `{}`>", typename)
         }
         _ => format!("Unexpected result: {:?}", result),
     };

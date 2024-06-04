@@ -31,9 +31,21 @@ impl Numtype {
             ast::Type::Bool => Ok(Self::I32),
             ast::Type::Float => Ok(Self::F32),
             ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
-            ast::Type::Arr(_) => Ok(Self::I64),  // arrays are referred to by a fat pointer containing memory loc and length
-            ast::Type::Str => Ok(Self::I64),  // string are represented as an Arr(Int)
+            ast::Type::TypeDef(..) => Ok(Self::I32),  // TypeDef returns a constructor function
+            // Heap types are referred to by a fat pointer containing memory loc and length
+            ast::Type::Arr(_) => Ok(Self::I64),
+            ast::Type::Str => Ok(Self::I64),
+            ast::Type::Object(..) => Ok(Self::I64),
             _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
+        }
+    }
+
+    // Return the size of the type in bytes
+    pub fn size(&self) -> u32 {
+        match self {
+            Self::Void => 0,
+            Self::F32 | Self::I32 => 4,
+            Self::I64 => 8,
         }
     }
 }
@@ -212,10 +224,12 @@ impl FuncTypeSignature {
     }
     pub fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         let (args, ret) = match typ {
-            ast::Type::Func(args, ret) => (args, ret),
+            ast::Type::Func(args, ret) | ast::Type::TypeDef(args, ret) => (args, ret),
             _ => return Err(format!("Cannot convert type {:?} to WASM FuncTypeSignature", typ)),
         };
-        let args = args.iter().map(|x| Numtype::from_ast_type(x)).collect::<Result<_, _>>()?;
+        let args = args.iter().map(
+            |x| Numtype::from_ast_type(x)
+        ).collect::<Result<_, _>>()?;
         let ret = Numtype::from_ast_type(ret)?;
         Ok(Self::new(args, Some(ret)))
     }
