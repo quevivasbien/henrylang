@@ -1,6 +1,7 @@
 use crate::ast;
 use super::wasmtypes::*;
 
+#[derive(Clone)]
 pub struct StructField {
     pub t: ast::Type,
     pub nt: Numtype,

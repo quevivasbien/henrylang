@@ -456,6 +456,96 @@ lazy_static! {
         };
         map.insert("heap_objs_equal".to_string(), heap_objs_equal);
 
+        let get_i32_field = {
+            let mut func = BuiltinFunc::new(
+                FuncTypeSignature::new(vec![Numtype::I64, Numtype::I32], Some(Numtype::I32)),
+                vec!["obj".to_string(), "field_offset".to_string()]
+            );
+            func.add_local("obj_offset", Numtype::I32);
+            
+            // obj_offset = obj >> 32
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("obj");
+            func.write_opcode(Opcode::I64Const);
+            func.write_byte(0x20);
+            func.write_opcode(Opcode::I64ShrU);
+            func.write_opcode(Opcode::I32WrapI64);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("obj_offset");
+            // read i32 at obj_offset + field_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("field_offset");
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::I32Load);
+            func.write_byte(0x02);  // alignment
+            func.write_byte(0x00);  // load offset
+
+            func.write_opcode(Opcode::End);
+
+            func
+        };
+        map.insert("get_i32_field".to_string(), get_i32_field);
+
+        let get_f32_field = {
+            let mut func = BuiltinFunc::new(
+                FuncTypeSignature::new(vec![Numtype::I64, Numtype::I32], Some(Numtype::F32)),
+                vec!["obj".to_string(), "field_offset".to_string()]
+            );
+            func.add_local("obj_offset", Numtype::I32);
+            
+            // obj_offset = obj >> 32
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("obj");
+            func.write_opcode(Opcode::I64Const);
+            func.write_byte(0x20);
+            func.write_opcode(Opcode::I64ShrU);
+            func.write_opcode(Opcode::I32WrapI64);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("obj_offset");
+            // read i32 at obj_offset + field_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("field_offset");
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::F32Load);
+            func.write_byte(0x02);  // alignment
+            func.write_byte(0x00);  // load offset
+
+            func.write_opcode(Opcode::End);
+
+            func
+        };
+        map.insert("get_f32_field".to_string(), get_f32_field);
+
+        let get_i64_field = {
+            let mut func = BuiltinFunc::new(
+                FuncTypeSignature::new(vec![Numtype::I64, Numtype::I32], Some(Numtype::I64)),
+                vec!["obj".to_string(), "field_offset".to_string()]
+            );
+            func.add_local("obj_offset", Numtype::I32);
+            
+            // obj_offset = obj >> 32
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("obj");
+            func.write_opcode(Opcode::I64Const);
+            func.write_byte(0x20);
+            func.write_opcode(Opcode::I64ShrU);
+            func.write_opcode(Opcode::I32WrapI64);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("obj_offset");
+            // read i64 at obj_offset + field_offset
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("field_offset");
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::I64Load);
+            func.write_byte(0x02);  // alignment
+            func.write_byte(0x00);  // load offset
+
+            func.write_opcode(Opcode::End);
+
+            func
+        };
+        map.insert("get_i64_field".to_string(), get_i64_field);
+
         // let create_range = {
         //     let mut func = BuiltinFunc::new(
         //         FuncTypeSignature::new(vec![Numtype::I32, Numtype::I32, Numtype::I32], Some(Numtype::I64)),

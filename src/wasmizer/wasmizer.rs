@@ -804,6 +804,24 @@ impl Wasmizer {
         Ok(())
     }
 
+    // get an entry from an array.
+    // last two values on the stack should be the array fatptr and the index to get
+    pub fn get_array_entry(&mut self, array_type: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(array_type)?;
+        // calculate the memory offset as index * size_of_array_element
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(numtype.size() as u8);
+        self.write_opcode(Opcode::I32Mul);
+        match numtype {
+            Numtype::I32 => self.call_builtin("get_i32_field"),
+            Numtype::I64 => self.call_builtin("get_i64_field"),
+            Numtype::F32 => self.call_builtin("get_f32_field"),
+            _ => unreachable!()
+        }?;
+
+        Ok(())
+    }
+
     pub fn write_if(&mut self, typ: &ast::Type) -> Result<(), String> {
         self.write_opcode(Opcode::If);
         self.write_byte(Numtype::from_ast_type(typ)? as u8);
@@ -874,7 +892,7 @@ impl Wasmizer {
             let store_op = match field.nt {
                 Numtype::I32 => Opcode::I32Store,
                 Numtype::F32 => Opcode::F32Store,
-                // Numtype::I64 => Opcode::I64Store, // TODO!
+                Numtype::I64 => Opcode::I64Store,
                 _ => unreachable!("Other numtypes should not be possible here"),
             };
             func.write_opcode(store_op);
@@ -902,6 +920,29 @@ impl Wasmizer {
         // add constructor to stack
         self.write_last_func_index();
 
+        Ok(())
+    }
+
+    // get the field of a struct
+    // fatptr to struct should be on top of stack when calling this
+    pub fn get_field(&mut self, object_type: ast::Type, field_name: &str) -> Result<(), String> {
+        // first, figure out which struct type this is for
+        let (struct_name, _) = match object_type {
+            ast::Type::Object(name, fields) => (name, fields),
+            _ => unreachable!()
+        };
+        let struct_def = self.structs.get(&struct_name).unwrap();
+        let field = struct_def.fields.iter().find(|(name, _)| name == field_name).unwrap().1.clone();
+
+        let field_offset = unsigned_leb128(field.offset);
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&field_offset);
+        match field.nt {
+            Numtype::I32 => self.call_builtin("get_i32_field"),
+            Numtype::F32 => self.call_builtin("get_f32_field"),
+            Numtype::I64 => self.call_builtin("get_i64_field"),
+            _ => unreachable!(),
+        }?;
         Ok(())
     }
 

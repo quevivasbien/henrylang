@@ -99,15 +99,27 @@ impl Expression for Call {
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let callee_type = self.validate()?;
-        for arg in self.args.iter() {
-            arg.wasmize(wasmizer)?;
-        }
-        let is_global = self.callee.wasmize(wasmizer)?;
-        if is_global == 0 {
-            wasmizer.call_indirect(&callee_type)?;
-        }
-        else {
-            wasmizer.call()?;
+        match callee_type {
+            Type::Func(..) | Type::TypeDef(..) => {
+                for arg in self.args.iter() {
+                    arg.wasmize(wasmizer)?;
+                }
+                let is_global = self.callee.wasmize(wasmizer)?;
+                if is_global == 0 {
+                    wasmizer.call_indirect(&callee_type)?;
+                }
+                else {
+                    wasmizer.call()?;
+                }
+            }
+            Type::Arr(array_type) => {
+                self.callee.wasmize(wasmizer)?;
+                for arg in self.args.iter() {
+                    arg.wasmize(wasmizer)?;
+                }
+                wasmizer.get_array_entry(array_type.as_ref())?;
+            }
+            _ => return Err(format!("Cannot call an expression of type {:?}", callee_type)),
         }
         Ok(0)
     }

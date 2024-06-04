@@ -69,7 +69,7 @@ impl Env {
 }
 
 
-fn view_string(memview: wasmer::MemoryView, offset: u64, size: u64) -> Result<String, String> {
+fn view_string(memview: &wasmer::MemoryView, offset: u64, size: u64) -> Result<String, String> {
     let mut buf = vec![0u8; size as usize];
     memview.read(offset, &mut buf).map_err(|e| format!("{}", e))?;
     let out = String::from_utf8(buf).map_err(|e| format!("{}", e))?;
@@ -78,7 +78,7 @@ fn view_string(memview: wasmer::MemoryView, offset: u64, size: u64) -> Result<St
     Ok(out)
 }
 
-fn view_object(memview: wasmer::MemoryView, offset: u64, size: u64, name: String, fields: Vec<(String, Type)>) -> Result<String, String> {
+fn view_object(memview: &wasmer::MemoryView, offset: u64, size: u64, name: String, fields: Vec<(String, Type)>) -> Result<String, String> {
     let mut buf = vec![0u8; size as usize];
     memview.read(offset, &mut buf).map_err(|e| format!("{}", e))?;
     let mut str_comps = Vec::with_capacity(fields.len());
@@ -99,14 +99,19 @@ fn view_object(memview: wasmer::MemoryView, offset: u64, size: u64, name: String
                 let value = f32::from_le_bytes(buf[offset..offset+4].try_into().unwrap());
                 offset += 4;
                 str_comps.push(format!("{}: {:?}", name, value));
+            },
+            _ => {
+                // value should be heap type
+                let fatptr = i64::from_le_bytes(buf[offset..offset+8].try_into().unwrap());
+                offset += 8;
+                str_comps.push(format!("{}: {}", name, view_memory(memview, fatptr, typ)?));
             }
-            _ => return Err(format!("view_object not implemented for type {:?}", typ))
         }
     }
     Ok(format!("{} {{ {} }}", name, str_comps.join(", ")))
 }
 
-fn view_memory(memview: wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<String, String> {
+fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<String, String> {
     let offset = (fatptr >> 32) as u64;
     let size = (fatptr & 0xffffffff) as u64;
     let arrtype = match typ {
@@ -164,7 +169,7 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
         (wasmer::Value::I64(fatptr), _) => {
             let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
             let memview = memory.view(&store);
-            view_memory(memview, *fatptr, typ)?
+            view_memory(&memview, *fatptr, typ)?
         }
         (wasmer::Value::I32(_), Type::TypeDef(_, t)) => {
             let typename = match t.as_ref() {

@@ -120,13 +120,13 @@ fn test_closure() {
 #[test]
 fn test_object() {
     let source = "
-    myobj := type {
+    MyObj := type {
         a: Int
         b: Int
         c: Str
     }
-    x := myobj(1, 2, \"henry\")
-    y := myobj(-1, -2, \"henry\")
+    x := MyObj(1, 2, \"henry\")
+    y := MyObj(-1, -2, \"henry\")
     
     x.a = -y.a and x.b = -y.b and x.c = y.c
     ";

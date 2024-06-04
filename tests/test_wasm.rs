@@ -27,6 +27,8 @@ fn test_arrays() {
     assert_eq!(run("a := [1, 2, 3, 4] a = [1, 2, 3, 4]"), "true");
     assert_eq!(run("a := [1, 2, 3, 4] b := a b = a"), "true");
     assert_eq!(run("[1, 2, 3] + [4, 5, 6]"), "[1, 2, 3, 4, 5, 6]");
+    assert_eq!(run("a := [1, 2, 3] a(1)"), "2");
+    assert_eq!(run("a := [\"hello\", \"world\"] a(1)"), "world");
 }
 
 #[test]
@@ -58,4 +60,6 @@ fn test_functions() {
 #[test]
 fn test_objects() {
     assert_eq!(run("MyType := type { c: Bool, a:Int b: Float } MyType(true, 152, 16.2)"), "MyType { c: true, a: 152, b: 16.2 }");
+    assert_eq!(run("(type { a: Str, b: Arr(Int) })(\"henry\", [1,2])"), "<anontype> { a: henry, b: [1, 2] }");
+    assert_eq!(run("MyType := type { a: Int b: Str } x := MyType(1, \"henry\") x.a = 1 and x.b = \"henry\""), "true");
 }
