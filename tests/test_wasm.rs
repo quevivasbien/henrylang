@@ -55,7 +55,8 @@ fn test_functions() {
     assert_eq!(run("f := |x: Int| { x + 1 } f(1)"), "2");
     assert_eq!(run("f := |x: Float| { x + 1.0 } f(1.0)"), "2.0");
     assert_eq!(run("f := |x: Int, y: Int| { x + y } f(1, 2)"), "3");
-    // todo: add more tests here
+    assert_eq!(run("f := |x: Arr(Int), i: Int| { x(i) } f([1, 2, 3], 1)"), "2");
+    assert_eq!(run("f := |x: Str, y: Str| { x + y } f(\"hello\", \"world\")"), "helloworld");
 }
 
 #[test]

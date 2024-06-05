@@ -73,6 +73,9 @@ impl WasmFunc {
     fn get_param_idx(&self, name: &str) -> Option<u32> {
         self.param_names.iter().position(|x| x == name).map(|x| x as u32)
     }
+    fn get_local_idx(&self, name: &str) -> Option<u32> {
+        self.locals.get_idx(name).map(|x| x + self.n_params())
+    }
 }
 
 pub struct Wasmizer {
@@ -197,7 +200,7 @@ impl Wasmizer {
         self.call_builtin("print[Int]").unwrap();
         self.write_opcode(Opcode::Drop);
 
-        let counter_idx = unsigned_leb128(self.locals_mut().add_local(format!("<counter>"), Numtype::I32 as u8));
+        let counter_idx = self.add_local("<counter>", Numtype::I32);
         // set counter = 0
         self.write_opcode(Opcode::I32Const);
         self.write_byte(0x00);
@@ -263,6 +266,7 @@ impl Wasmizer {
             Some(func) => func,
             None => return Err("Tried to pop function when frames is empty".to_string()),
         };
+        println!("Finished function index {}", self.builder.funcs.len());
         self.builder.add_function(
             &func.signature,
             func.locals.types,
@@ -493,9 +497,14 @@ impl Wasmizer {
         Ok(())
     }
 
+    fn add_local(&mut self, name: &str, numtype: Numtype) -> Vec<u8> {
+        let i = self.locals_mut().add_local(name.to_string(), numtype as u8) + self.current_func().n_params();
+        unsigned_leb128(i)
+    }
+
     fn repeat(&mut self, bytes: &[u8], count: u32) -> Result<(), String> {
         // creates a for loop that repeats instructions in bytes count times
-        let i = unsigned_leb128(self.locals_mut().add_local(format!("<i>"), Numtype::I32 as u8));
+        let i = self.add_local("<i>", Numtype::I32);
         // set i = count
         self.write_opcode(Opcode::I32Const);
         self.bytes_mut().append(&mut unsigned_leb128(count));
@@ -549,9 +558,9 @@ impl Wasmizer {
 
     pub fn write_array(&mut self, len: u16, typ: &ast::Type) -> Result<(), String> {
         // create locals to store info about array as it is constructed
-        let startptr_idx = unsigned_leb128(self.locals_mut().add_local(format!("<startptr>"), Numtype::I32 as u8));
-        let memptr_idx = unsigned_leb128(self.locals_mut().add_local(format!("<memptr>"), Numtype::I32 as u8));
-        let value_idx = unsigned_leb128(self.locals_mut().add_local(format!("<value>"), Numtype::from_ast_type(typ)? as u8));
+        let startptr_idx = self.add_local("<startptr>", Numtype::I32);
+        let memptr_idx = self.add_local("<memptr>", Numtype::I32);
+        let value_idx = self.add_local("<value>", Numtype::I32);
         
         // determine the bytes per value needed
         let numtype = Numtype::from_ast_type(typ)?;
@@ -596,7 +605,7 @@ impl Wasmizer {
         let data = value[1..value.len() - 1].as_bytes().to_vec();
         let size = unsigned_leb128(data.len() as u32);
         let segment_idx = self.builder.add_data(data)?;
-        let offset_idx = unsigned_leb128(self.locals_mut().add_local(format!("<offset>"), Numtype::I32 as u8));
+        let offset_idx = self.add_local("<offset>", Numtype::I32);
         // destination is memptr + 4
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
@@ -744,11 +753,9 @@ impl Wasmizer {
         // only handle local variables for now
         // create a local variable
         let typ = Numtype::from_ast_type(typ)? as u8;
-        Ok(self.locals_mut().add_local(name, typ))
+        Ok(self.locals_mut().add_local(name, typ) + self.current_func().n_params())
     }
     pub fn set_variable(&mut self, idx: u32, typ: &ast::Type) -> Result<(), String> {
-        let idx = idx + self.current_func().n_params();
-        
         // if typ is a heap-allocated type, we also need to copy the memory
         if Numtype::from_ast_type(typ)? == Numtype::I64 {
             self.copy_heap_object()?;
@@ -761,7 +768,7 @@ impl Wasmizer {
     pub fn get_variable(&mut self, name: String) -> Result<i32, String> {
         // can't yet deal with upvalues
         // first look in local variables
-        let idx = self.locals().get_idx(&name);
+        let idx = self.current_func().get_local_idx(&name);
         if let Some(idx) = idx {
             self.write_opcode(Opcode::LocalGet);
             self.bytes_mut().append(&mut unsigned_leb128(idx));

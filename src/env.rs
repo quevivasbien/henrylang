@@ -148,6 +148,9 @@ fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<S
             }
             format!("{:?}", out)
         }
+        Type::Func(args, ret) => {
+            format!("<array of function: {:?} -> {:?} with length {}>", args, ret, size / 4)
+        }
         // Handle nested heap types
         _ => {
             let mut str_comps = Vec::new();
@@ -179,6 +182,9 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
             let memory = instance.exports.get_memory("memory").map_err(|e| format!("{}", e))?;
             let memview = memory.view(&store);
             view_memory(&memview, *fatptr, typ)?
+        }
+        (wasmer::Value::I32(_), Type::Func(params, ret)) => {
+            format!("<function: {:?} -> {:?}>", params, ret)
         }
         (wasmer::Value::I32(_), Type::TypeDef(_, t)) => {
             let typename = match t.as_ref() {

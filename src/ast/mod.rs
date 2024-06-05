@@ -126,7 +126,7 @@ pub struct ErrorExpression;
 
 impl Expression for ErrorExpression {
     fn get_type(&self) -> Result<Type, String> {
-        Err("ErrorExpressions have no type".to_string()).unwrap()
+        Err("ErrorExpressions have no type".to_string())
     }
     fn set_parent(&mut self, _parent: Option<*const dyn Expression>) -> Result<(), String> {
         Ok(())
