@@ -3,7 +3,7 @@ use henrylang::*;
 
 macro_rules! run_expect_value {
     ($source:expr, $variant:ident) => {
-        match VM::new().interpret($source.to_string())
+        match VM::new().interpret($source)
             .unwrap()
         {
             values::TaggedValue::$variant(x) => x,

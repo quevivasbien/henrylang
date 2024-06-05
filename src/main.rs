@@ -2,15 +2,28 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 
 use henrylang::*;
 
+const HISTORY_FILE: &str = ".henrylang_history";
+const TITLE: &str = r#"
+oooo                                                   
+`888                                                   
+ 888 .oo.    .ooooo.  ooo. .oo.   oooo d8b oooo    ooo 
+ 888P"Y88b  d88' `88b `888P"Y88b  `888""8P  `88.  .8'  
+ 888   888  888ooo888  888   888   888       `88..8'   
+ 888   888  888    .o  888   888   888        `888'    
+o888o o888o `Y8bod8P' o888o o888o d888b        .8'     
+                                           .o..P'      
+            [ henrylang v0.4.0 ]           `Y8P'       
+"#;
+
 #[allow(unused_variables)]
 fn repl() {
     let mut rl = DefaultEditor::new().unwrap();
-    let _ = rl.load_history(".henrylang_history");
+    let _ = rl.load_history(HISTORY_FILE);
     rl.bind_sequence(
         rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE),
         rustyline::Cmd::HistorySearchForward
     );
-    println!("\n[ henrylang v0.4.0 ]\n");
+    println!("{}", TITLE);
     #[cfg(not(feature = "wasm"))]
     let mut vm = VM::new();
     loop {
@@ -20,14 +33,14 @@ fn repl() {
                 if line == "exit" {
                     break;
                 }
-                rl.add_history_entry(line.as_str()).unwrap();
+                rl.add_history_entry(&line).unwrap();
                 #[cfg(not(feature = "wasm"))]
                 match vm.interpret(line) {
                     Ok(x) => println!("{}", x),
                     Err(e) => println!("{}", e),
                 }
                 #[cfg(feature = "wasm")]
-                match wasmize(line, Env::default()) {
+                match wasmize(&line, Env::default()) {
                     Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
                         Ok(x) => println!("{}", x),
                         Err(e) => println!("Runtime Error: {}", e)
@@ -48,7 +61,7 @@ fn repl() {
         }
         println!()
     }
-    rl.save_history(".henrylang_history").unwrap();
+    rl.save_history(HISTORY_FILE).unwrap();
 }
 
 fn run_file(path: &str) {
@@ -66,7 +79,7 @@ fn run_file(path: &str) {
         Err(e) => println!("{}", e),
     }
     #[cfg(feature = "wasm")]
-    match wasmize(contents, Env::default()) {
+    match wasmize(&contents, Env::default()) {
         Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
             Ok(x) => println!("{}", x),
             Err(e) => println!("Runtime Error: {}", e),
@@ -85,6 +98,6 @@ fn main() {
         run_file(&args[1]);
     }
     else {
-        println!("Usage: `{}` for REPL or `{}` <script>", args[0], args[0]);
+        println!("Usage: `{}` for REPL or `{} <script>`", args[0], args[0]);
     }
 }

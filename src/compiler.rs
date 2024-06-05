@@ -266,7 +266,7 @@ impl Compiler {
     }
 }
 
-pub fn compile(source: String, typecontext: TypeContext) -> Result<(Function, ast::Type), String> {
+pub fn compile(source: &str, typecontext: TypeContext) -> Result<(Function, ast::Type), String> {
     let tokens = scanner::scan(source);
     let ast = parser::parse(tokens, typecontext.clone()).map_err(|_| "Compilation halted due to parsing error.")?;
     #[cfg(feature = "debug")]

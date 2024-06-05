@@ -8,7 +8,7 @@ struct Scanner {
 }
 
 impl Scanner {
-    pub fn new(source: String) -> Self {
+    pub fn new(source: &str) -> Self {
         Self {
             source: source.chars().collect(),
             start: 0,
@@ -243,7 +243,7 @@ impl Scanner {
     }
 }
 
-pub fn scan(source: String) -> Vec<Token> {
+pub fn scan(source: &str) -> Vec<Token> {
     let mut scanner = Scanner::new(source);
     scanner.scan()
 }

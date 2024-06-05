@@ -163,6 +163,7 @@ impl Expression for Binary {
             TokenType::Slash => wasmizer.write_div(&left_type),
             TokenType::And => wasmizer.write_and(&left_type),
             TokenType::Or => wasmizer.write_or(&left_type),
+            TokenType::To => wasmizer.write_range(&left_type),
             _ => return Err(format!("Operator {:?} not supported", self.op)),
         }?;
         Ok(0)

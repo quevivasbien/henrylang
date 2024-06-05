@@ -1,6 +1,6 @@
 use crate::env::Import;
 
-use super::wasmtypes::*;
+use super::{builtin_funcs::BuiltinFunc, wasmtypes::*};
 
 const MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
 const VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
@@ -120,6 +120,15 @@ impl ModuleBuilder {
         ].concat();
         self.imports.push(bytes);
         self.imports.len() as u32 - 1
+    }
+
+    pub fn add_builtin(&mut self, func: &BuiltinFunc) -> Result<u32, String> {
+        self.add_function(
+            func.get_signature(),
+            func.get_local_types(),
+            func.get_bytes().to_vec(),
+            None
+        )
     }
 
     pub fn get_functype_idx(&mut self, ftype: &FuncTypeSignature) -> u32 {

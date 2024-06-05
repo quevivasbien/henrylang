@@ -35,6 +35,7 @@ impl Numtype {
             // Heap types are referred to by a fat pointer containing memory loc and length
             ast::Type::Arr(_) => Ok(Self::I64),
             ast::Type::Str => Ok(Self::I64),
+            ast::Type::Iter(_) => Ok(Self::I64),
             ast::Type::Object(..) => Ok(Self::I64),
             _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }

@@ -877,7 +877,7 @@ impl VM {
         }
     }
 
-    pub fn interpret(&mut self, source: String) -> Result<TaggedValue, InterpreterError> {
+    pub fn interpret(&mut self, source: &str) -> Result<TaggedValue, InterpreterError> {
         let (function, return_type) = 
             compiler::compile(source, self.typecontext.clone())
             .map_err(|e| InterpreterError::CompileError(e))?

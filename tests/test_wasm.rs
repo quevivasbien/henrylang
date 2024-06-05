@@ -1,7 +1,7 @@
 use henrylang::*;
 
 fn run(source: &str) -> String {
-    match wasmize(source.to_string(), Env::default()) {
+    match wasmize(source, Env::default()) {
         Ok((bytes, typ)) => {
             match run_wasm(&bytes, typ) {
                 Ok(x) => x,

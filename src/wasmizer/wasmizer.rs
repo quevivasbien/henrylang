@@ -99,12 +99,7 @@ impl Wasmizer {
 
         // add hard-coded builtin functions
         for (name, func) in builtin_funcs::BUILTINS.iter() {
-            let idx = builder.add_function(
-                func.get_signature(),
-                func.get_local_types(),
-                func.get_bytes().to_vec(),
-                None
-            )?;
+            let idx = builder.add_builtin(func)?;
             builtins.insert(name.to_string(), idx);
         }
 
@@ -266,7 +261,6 @@ impl Wasmizer {
             Some(func) => func,
             None => return Err("Tried to pop function when frames is empty".to_string()),
         };
-        println!("Finished function index {}", self.builder.funcs.len());
         self.builder.add_function(
             &func.signature,
             func.locals.types,
@@ -494,6 +488,22 @@ impl Wasmizer {
                 return Err(format!("Cannot OR values of type {:?}", typ));
             }
         }
+        Ok(())
+    }
+
+    pub fn write_range(&mut self, typ: &ast::Type) -> Result<(), String> {
+        if typ != &ast::Type::Int {
+            return Err(format!("Cannot create range of values of type {:?}. Ranges must be between integers.", typ));
+        }
+
+        if self.builtins.get("<RangeIter>").is_none() {
+            self.init_range_iter()?;
+        };
+        let factory = unsigned_leb128(*self.builtins.get("<RangeIterFactory>").unwrap());
+
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&factory);
+
         Ok(())
     }
 
@@ -845,8 +855,8 @@ impl Wasmizer {
 
     // take a struct definition and creates a constructor for that struct
     // adds struct to Wasmizer's list of struct definitions
-    // adds struct constructor idx to stack
-    pub fn create_struct(&mut self, struct_name: String, struct_def: Struct) -> Result<(), String> {
+    // optionally adds struct constructor idx to stack
+    pub fn create_struct(&mut self, struct_name: String, struct_def: Struct, write_constructor: bool) -> Result<(), String> {
         let mut fieldnames = Vec::with_capacity(struct_def.fields.len());
         let mut fieldtypes = Vec::with_capacity(struct_def.fields.len());
         for (name, field) in struct_def.fields.iter() {
@@ -913,20 +923,16 @@ impl Wasmizer {
         func.write_opcode(Opcode::End);
 
         // add to list of builtin functions
-        let idx = self.builder.add_function(
-            func.get_signature(),
-            func.get_local_types(),
-            func.get_bytes().to_vec(),
-            None
-        )?;
+        let idx = self.builder.add_builtin(&func)?;
         self.builtins.insert(struct_name.clone(), idx);
 
         // add to definitions
         self.structs.insert(struct_name, struct_def);
        
-        // add constructor to stack
-        self.write_last_func_index();
-
+        if write_constructor {
+            // add constructor to stack
+            self.write_last_func_index();
+        }
         Ok(())
     }
 
@@ -953,12 +959,124 @@ impl Wasmizer {
         Ok(())
     }
 
+    // create a struct type that is used to store ranges
+    fn init_range_iter(&mut self) -> Result<(), String> {
+        // add the struct definition and constructor
+        let struct_def = Struct::new(
+            vec![
+                ("current".to_string(), ast::Type::Bool),
+                ("advance_fn".to_string(), ast::Type::Int),
+                ("step".to_string(), ast::Type::Int),
+                ("stop".to_string(), ast::Type::Int),
+            ],
+        );
+
+        self.create_struct("<RangeIter>".to_string(), struct_def, false)?;
+        let constructor_idx = *self.builtins.get("<RangeIter>").unwrap();
+
+        // initialize the "advance" function used by this Iter type
+        // function will take the offset of the start of a range struct, update the "current" field, and return a bool (1 if the iterator is done)
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+            vec!["offset".to_string()],
+        );
+        func.add_local("current", Numtype::I32);
+        // add "step" to "current"
+        // load value at "step"
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");  // step = *(offset + 2 * 4)
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(2 * 4);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        // load value at current
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        // add
+        func.write_opcode(Opcode::I32Add);
+        // set as new value of current, and store new value
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("current");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(Opcode::I32Store);
+        func.write_slice(&[0x02, 0x00]);
+
+        // return current == stop
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");  // stop = *(offset + 3 * 4)
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(3 * 4);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        func.write_opcode(Opcode::I32Eq);
+
+        func.write_opcode(Opcode::End);
+
+        let advance_fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert("<RangeIterAdvance>".to_string(), advance_fn_idx);
+
+        // create helper function for building range iterators from `<start> to <stop>` syntax
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I32, Numtype::I32], Some(Numtype::I64)),
+            vec!["start".to_string(), "stop".to_string()],
+        );
+        func.add_local("step", Numtype::I32);
+        // step = 1 if stop > start else -1
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("start");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("stop");
+        func.write_opcode(Opcode::I32LtS);
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::I32 as u8);
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+        func.write_opcode(Opcode::Else);
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&signed_leb128(-1));
+        func.write_opcode(Opcode::End);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("step");
+
+        // pass values to constructor
+        // current
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("start");
+        // advance_fn
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(advance_fn_idx));
+        // step
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("step");
+        // stop
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("stop");
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&unsigned_leb128(constructor_idx));
+
+        func.write_opcode(Opcode::End);
+
+        let factory_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert("<RangeIterFactory>".to_string(), factory_idx);
+
+        Ok(())
+    }
+
     fn to_bytes(&self) -> Vec<u8> {
         self.builder.program()
     }
 }
 
-pub fn wasmize(source: String, global_env: env::Env) -> Result<(Vec<u8>, ast::Type), String> {
+pub fn wasmize(source: &str, global_env: env::Env) -> Result<(Vec<u8>, ast::Type), String> {
     let tokens = scanner::scan(source);
     let ast = parser::parse(tokens, global_env.global_types.clone()).map_err(|_| "Compilation halted due to parsing error.")?;
     #[cfg(feature = "debug")]
