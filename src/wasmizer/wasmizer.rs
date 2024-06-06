@@ -352,6 +352,21 @@ impl Wasmizer {
         Ok(())
     }
 
+    pub fn write_collect(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
+        match numtype {
+            Numtype::I32 => {
+                if self.builtins.get("collect_i32").is_none() {
+                    self.init_collect_i32()?;
+                }
+                self.call_builtin("collect_i32").unwrap();
+            }
+            _ => unimplemented!()
+        }
+
+        Ok(())
+    }
+
     pub fn write_equal(&mut self, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int | ast::Type::Bool => {
@@ -674,19 +689,6 @@ impl Wasmizer {
 
         self.align_memptr();
 
-        // set alloc size at memptr
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        // alloc size is memptr - offset
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&offset_idx);
-        self.write_opcode(Opcode::I32Sub);
-        self.write_opcode(Opcode::I32Store);
-        self.write_byte(0x02);  // alignment
-        self.write_byte(0x00);  // offset
-
         self.increment_n_allocs();
 
         // return [offset, size]
@@ -1006,6 +1008,8 @@ impl Wasmizer {
             vec!["offset".to_string()],
         );
         func.add_local("current", Numtype::I32);
+        func.add_local("step", Numtype::I32);
+        func.add_local("stop", Numtype::I32);
         // add "step" to "current"
         // load value at "step"
         func.write_opcode(Opcode::LocalGet);
@@ -1015,6 +1019,8 @@ impl Wasmizer {
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("step");
         // load value at current
         func.write_opcode(Opcode::LocalGet);
         func.write_var("offset");
@@ -1032,17 +1038,44 @@ impl Wasmizer {
         func.write_opcode(Opcode::I32Store);
         func.write_slice(&[0x02, 0x00]);
 
-        // return current == stop
+        // return (current > stop && step > 0) || (current < stop && step < 0)
+        // (1 if done, 0 otherwise)
+        // stop = *(offset + 3 * 4)
         func.write_opcode(Opcode::LocalGet);
-        func.write_var("current");
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");  // stop = *(offset + 3 * 4)
+        func.write_var("offset");
         func.write_opcode(Opcode::I32Const);
         func.write_byte(3 * 4);
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
-        func.write_opcode(Opcode::I32Eq);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("stop");
+        // current > stop && step > 0
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("stop");
+        func.write_opcode(Opcode::I32GtS);
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("step");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x00);
+        func.write_opcode(Opcode::I32GtS);
+        func.write_opcode(Opcode::I32And);
+        // current < stop && step < 0
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("stop");
+        func.write_opcode(Opcode::I32LtS);
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("step");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x00);
+        func.write_opcode(Opcode::I32LtS);
+        func.write_opcode(Opcode::I32And);
+        // (current > stop && step > 0) || (current < stop && step < 0)
+        func.write_opcode(Opcode::I32Or);
 
         func.write_opcode(Opcode::End);
 
@@ -1078,7 +1111,7 @@ impl Wasmizer {
         func.write_var("start");
         // advance_fn
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(advance_fn_idx));
+        func.write_slice(&unsigned_leb128(advance_fn_idx - self.builder.imports.len() as u32));  // need to subtract number of imports, since this will be called indirectly, and imports are not included in the function table
         // step
         func.write_opcode(Opcode::LocalGet);
         func.write_var("step");
@@ -1098,7 +1131,140 @@ impl Wasmizer {
 
     // create the `collect_i32` builtin (used for the @ operator on Iter(Int) or Iter(Func(..)) types)
     fn init_collect_i32(&mut self) -> Result<(), String> {
-        todo!()
+        let mut func = BuiltinFunc::new(
+            // takes an Iter and returns an Arr
+            FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I64)),
+            vec!["iter_fatptr".to_string()],
+        );
+        func.add_local("iter_offset", Numtype::I32);
+        func.add_local("array_offset", Numtype::I32);
+        func.add_local("element_offset", Numtype::I32);
+        func.add_local("alloc_size", Numtype::I32);
+        func.add_local("current", Numtype::I32);
+
+        // iter_offset = iter_fatpr >> 32
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_fatptr");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("iter_offset");
+
+        // start by allocating space for 1 element
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1 * 4);
+        func.write_opcode(Opcode::Call);
+        let alloc_idx = unsigned_leb128(*self.builtins.get("alloc").unwrap());
+        func.write_slice(&alloc_idx);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("array_offset");
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("element_offset");
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(2 * 4);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("alloc_size");
+
+        // loop:
+        // *element_offset = iter_offset->current
+        // element_offset += 4
+        // if element_offset >= memptr, allocate more space
+        // if iterator->advance(), break
+
+        func.write_opcode(Opcode::Loop);
+        func.write_byte(Numtype::Void as u8);
+
+        // read current value
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_offset");
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("current");
+
+        // store current at element_offset
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("element_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(Opcode::I32Store);
+        func.write_slice(&[0x02, 0x00]);
+
+        // add 4 to element_offset
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("element_offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(4);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("element_offset");
+
+        // if element_offset >= memptr, allocate more space
+        func.write_opcode(Opcode::GlobalGet);
+        func.write_byte(0x00);
+        func.write_opcode(Opcode::I32GeU);
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::Void as u8);
+
+        // allocate
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("alloc_size");
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&alloc_idx);
+        func.write_opcode(Opcode::Drop);
+
+        // double alloc size
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("alloc_size");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(2);
+        func.write_opcode(Opcode::I32Mul);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("alloc_size");
+
+        func.write_opcode(Opcode::End);  // end if
+
+        // call iterator->advance
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(4);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        let functype_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)));
+        func.write_opcode(Opcode::CallIndirect);
+        func.write_slice(&mut unsigned_leb128(functype_idx));  // signature index
+        func.write_byte(0x00);  // table index
+
+        // branch if result != 1
+        func.write_opcode(Opcode::I32Eqz);
+        func.write_opcode(Opcode::BrIf);
+        func.write_byte(0x00);
+
+        func.write_opcode(Opcode::End);  // end loop
+
+        // return [array_offset, element_offset - array_offset]
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("element_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("array_offset");
+        func.write_opcode(Opcode::I32Sub);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("element_offset");  // use element offset again to store size
+        func.create_fatptr("array_offset", "element_offset");
+
+        func.write_opcode(Opcode::End);  // end function
+
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert("collect_i32".to_string(), fn_idx);
+
+        Ok(())
     }
 
     fn to_bytes(&self) -> Vec<u8> {

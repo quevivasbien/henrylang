@@ -65,3 +65,9 @@ fn test_objects() {
     assert_eq!(run("(type { a: Str, b: Arr(Int) })(\"henry\", [1,2])"), "<anontype> { a: henry, b: [1, 2] }");
     assert_eq!(run("MyType := type { a: Int b: Str } x := MyType(1, \"henry\") x.a = 1 and x.b = \"henry\""), "true");
 }
+
+#[test]
+fn test_ranges() {
+    assert_eq!(run("@(0 to 3)"), "[0, 1, 2, 3]");
+    assert_eq!(run("@(0 to -3)"), "[0, -1, -2, -3]");
+}

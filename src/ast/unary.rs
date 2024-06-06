@@ -80,6 +80,7 @@ impl Expression for Unary {
         match (&self.op, &right_type) {
             (TokenType::Bang, Type::Bool) => wasmizer.write_negate(&right_type)?,
             (TokenType::Minus, Type::Int | Type::Float) => wasmizer.write_negate(&right_type)?,
+            (TokenType::At, Type::Iter(t)) => wasmizer.write_collect(t.as_ref())?,
             _ => return Err(format!("Unary operator {:?} not supported for type {:?}", self.op, right_type)),
         }
         Ok(0)
