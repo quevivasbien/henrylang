@@ -89,7 +89,7 @@ pub enum Opcode {
     I32LtU = 0x49,
     I32GtS = 0x4a,
     I32LeS = 0x4c,
-    I32LeU = 0x4d,
+    // I32LeU = 0x4d,
     I32GeS = 0x4e,
     F32Eq = 0x5b,
     F32Ne = 0x5c,

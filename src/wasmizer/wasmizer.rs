@@ -10,6 +10,7 @@ use super::{builtin_funcs, structs::Struct, wasmtypes::*};
 struct Local {
     name: String,
     depth: i32,
+    index: u32,
 }
 
 #[derive(Debug)]
@@ -17,6 +18,7 @@ struct LocalData {
     locals: Vec<Local>,
     types: Vec<u8>,
     scope_depth: i32,
+    n_locals: u32, // stores total number of locals declared in this function
 }
 
 impl Default for LocalData {
@@ -25,23 +27,21 @@ impl Default for LocalData {
             locals: Vec::new(),
             types: Vec::new(),
             scope_depth: -1,
+            n_locals: 0,
         }
     }
 }
 
 impl LocalData {
     fn add_local(&mut self, name: String, typ: u8) -> u32 {
-        self.locals.push(Local { name, depth: self.scope_depth });
+        let index = self.n_locals;
+        self.n_locals += 1;
+        self.locals.push(Local { name, depth: self.scope_depth, index });
         self.types.push(typ);
-        self.locals.len() as u32 - 1
+        index
     }
     fn get_idx(&self, name: &str) -> Option<u32> {
-        for (i, local) in self.locals.iter().enumerate().rev() {
-            if local.name == name {
-                return Some(i as u32);
-            }
-        }
-        None
+        self.locals.iter().rev().find_map(|local| if local.name == name { Some(local.index) } else { None })
     }
 }
 
@@ -226,10 +226,10 @@ impl Wasmizer {
         self.write_opcode(Opcode::LocalTee);
         self.write_slice(&counter_idx);
 
-        // continue if counter <= memptr
+        // continue if counter < memptr
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
-        self.write_opcode(Opcode::I32LeU);
+        self.write_opcode(Opcode::I32LtU);
         self.write_opcode(Opcode::BrIf);
         self.write_byte(0x00);  // break depth
         self.write_opcode(Opcode::End);
@@ -247,16 +247,47 @@ impl Wasmizer {
         let ret = Numtype::from_ast_type(rettype)?;
         let func = WasmFunc::new(name, FuncTypeSignature::new(args, Some(ret)), export);
         self.frames.push(func);
+
+        // create a local to store the value of the memptr at the start of the function.
+        // at the end of the function, the memptr will be set back to this value
+        let idx = self.add_local("<memptr_at_start>", Numtype::I32);
+        self.write_opcode(Opcode::GlobalGet);
+        self.write_byte(0x00);
+        self.write_opcode(Opcode::LocalSet);
+        self.write_slice(&idx);
+
         Ok(())
     }
     pub fn finish_func(&mut self) -> Result<u32, String> {
+        #[cfg(feature = "debug")]
+        self.print_mem();
+        // set memptr back to what it was at the start of the function
+        let memptr_at_start_idx = self.current_func().get_local_idx("<memptr_at_start>").unwrap();
+        self.write_opcode(Opcode::LocalGet);
+        self.write_slice(&unsigned_leb128(memptr_at_start_idx));
+        self.write_opcode(Opcode::GlobalSet);
+        self.write_byte(0x00);
+        #[cfg(feature = "debug")]
+        {
+            // print memptr
+            self.write_opcode(Opcode::GlobalGet);
+            self.write_byte(0x00);
+            self.call_builtin("print[Int]").unwrap();
+            self.write_opcode(Opcode::Drop);
+        }
+
+        // write end
         self.current_func_mut().bytes.push(Opcode::End as u8);
+
+        // add to exports if needed
         let export_name = if self.current_func().export {
             Some(self.current_func().name.clone())
         }
         else {
             None
         };
+
+        // pop from frames and add to ModuleBuilder
         let func = match self.frames.pop() {
             Some(func) => func,
             None => return Err("Tried to pop function when frames is empty".to_string()),
@@ -512,37 +543,37 @@ impl Wasmizer {
         unsigned_leb128(i)
     }
 
-    fn repeat(&mut self, bytes: &[u8], count: u32) -> Result<(), String> {
-        // creates a for loop that repeats instructions in bytes count times
-        let i = self.add_local("<i>", Numtype::I32);
-        // set i = count
-        self.write_opcode(Opcode::I32Const);
-        self.bytes_mut().append(&mut unsigned_leb128(count));
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&i);
+    // fn repeat(&mut self, bytes: &[u8], count: u32) -> Result<(), String> {
+    //     // creates a for loop that repeats instructions in bytes count times
+    //     let i = self.add_local("<i>", Numtype::I32);
+    //     // set i = count
+    //     self.write_opcode(Opcode::I32Const);
+    //     self.bytes_mut().append(&mut unsigned_leb128(count));
+    //     self.write_opcode(Opcode::LocalSet);
+    //     self.write_slice(&i);
 
-        // begin loop
-        self.write_opcode(Opcode::Loop);
-        self.write_byte(Numtype::Void as u8);  // loop shouldn't add anything to stack
+    //     // begin loop
+    //     self.write_opcode(Opcode::Loop);
+    //     self.write_byte(Numtype::Void as u8);  // loop shouldn't add anything to stack
         
-        // insert bytes
-        self.write_slice(bytes);
+    //     // insert bytes
+    //     self.write_slice(bytes);
 
-        // subtract 1 from i
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&i);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x01);
-        self.write_opcode(Opcode::I32Sub);
-        self.write_opcode(Opcode::LocalTee);
-        self.write_slice(&i);
+    //     // subtract 1 from i
+    //     self.write_opcode(Opcode::LocalGet);
+    //     self.write_slice(&i);
+    //     self.write_opcode(Opcode::I32Const);
+    //     self.write_byte(0x01);
+    //     self.write_opcode(Opcode::I32Sub);
+    //     self.write_opcode(Opcode::LocalTee);
+    //     self.write_slice(&i);
 
-        // continue if i != 0
-        self.write_opcode(Opcode::BrIf);
-        self.write_byte(0x00);  // break depth
-        self.write_opcode(Opcode::End);
-        Ok(())
-    }
+    //     // continue if i != 0
+    //     self.write_opcode(Opcode::BrIf);
+    //     self.write_byte(0x00);  // break depth
+    //     self.write_opcode(Opcode::End);
+    //     Ok(())
+    // }
 
     // assumes fatptr to object to copy is last thing on stack
     fn copy_heap_object(&mut self) -> Result<(), String> {
@@ -567,13 +598,13 @@ impl Wasmizer {
     }
 
     pub fn write_array(&mut self, len: u16, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
         // create locals to store info about array as it is constructed
         let startptr_idx = self.add_local("<startptr>", Numtype::I32);
         let memptr_idx = self.add_local("<memptr>", Numtype::I32);
-        let value_idx = self.add_local("<value>", Numtype::I32);
+        let value_idx = self.add_local("<value>", numtype);
         
         // determine the bytes per value needed
-        let numtype = Numtype::from_ast_type(typ)?;
         let memsize = numtype.size();
         // call alloc
         self.write_opcode(Opcode::I32Const);
@@ -616,12 +647,9 @@ impl Wasmizer {
         let size = unsigned_leb128(data.len() as u32);
         let segment_idx = self.builder.add_data(data)?;
         let offset_idx = self.add_local("<offset>", Numtype::I32);
-        // destination is memptr + 4
+        // destination is memptr
         self.write_opcode(Opcode::GlobalGet);
         self.write_byte(0x00);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x04);
-        self.write_opcode(Opcode::I32Add);
         self.write_opcode(Opcode::LocalTee);
         self.write_slice(&offset_idx);  // we'll use this later
         // offset in source is 0
@@ -640,9 +668,6 @@ impl Wasmizer {
         self.write_byte(0x00);
         self.write_opcode(Opcode::I32Const);
         self.write_slice(&size);
-        self.write_opcode(Opcode::I32Const);
-        self.write_byte(0x04);
-        self.write_opcode(Opcode::I32Add);
         self.write_opcode(Opcode::I32Add);
         self.write_opcode(Opcode::GlobalSet);
         self.write_byte(0x00);
@@ -705,22 +730,22 @@ impl Wasmizer {
         Ok(())
     }
 
-    fn free_multiple(&mut self, n_frees: u32) -> Result<(), String> {
-        #[cfg(feature = "debug")]
-        {
-            self.print_mem();
-        }
+    // fn free_multiple(&mut self, n_frees: u32) -> Result<(), String> {
+    //     #[cfg(feature = "debug")]
+    //     {
+    //         self.print_mem();
+    //     }
 
-        // call free
-        let mut bytes = Vec::with_capacity(2);
-        let free_idx = match self.builtins.get("free") {
-            Some(idx) => unsigned_leb128(*idx),
-            None => return Err("Could not find 'free' builtin function".to_string()),
-        };
-        bytes.push(Opcode::Call as u8);
-        bytes.extend_from_slice(&free_idx);
-        self.repeat(&bytes, n_frees)
-    }
+    //     // call free
+    //     let mut bytes = Vec::with_capacity(2);
+    //     let free_idx = match self.builtins.get("free") {
+    //         Some(idx) => unsigned_leb128(*idx),
+    //         None => return Err("Could not find 'free' builtin function".to_string()),
+    //     };
+    //     bytes.push(Opcode::Call as u8);
+    //     bytes.extend_from_slice(&free_idx);
+    //     self.repeat(&bytes, n_frees)
+    // }
 
     pub fn write_drop(&mut self) {
         self.write_opcode(Opcode::Drop);
@@ -736,11 +761,11 @@ impl Wasmizer {
         Ok(())
     }
     pub fn end_scope(&mut self) -> Result<(), String> {
-        // free memory
-        let n_frees = self.current_func_mut().allocs.pop().unwrap();
-        if n_frees > 0 {
-            self.free_multiple(n_frees)?;
-        }
+        // // free memory
+        // let n_frees = self.current_func_mut().allocs.pop().unwrap();
+        // if n_frees > 0 {
+        //     self.free_multiple(n_frees)?;
+        // }
         // Write END opcode, if we're not at the top level of a function
         if self.locals().scope_depth > 0 {
             self.write_opcode(Opcode::End);
@@ -1069,6 +1094,11 @@ impl Wasmizer {
         self.builtins.insert("<RangeIterFactory>".to_string(), factory_idx);
 
         Ok(())
+    }
+
+    // create the `collect_i32` builtin (used for the @ operator on Iter(Int) or Iter(Func(..)) types)
+    fn init_collect_i32(&mut self) -> Result<(), String> {
+        todo!()
     }
 
     fn to_bytes(&self) -> Vec<u8> {

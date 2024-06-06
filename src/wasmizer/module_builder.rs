@@ -181,16 +181,26 @@ impl ModuleBuilder {
     }
 
     fn global_section(&self) -> Vec<u8> {
-        // for now, just the memptr global
         section_from_chunks(
             SectionType::Global,
-            &[vec![
-                Numtype::I32 as u8,  // data type
-                0x01,  // mutability (1 means mutable)
-                Opcode::I32Const as u8,
-                0x00,  // initial value
-                Opcode::End as u8,
-            ]]
+            &[
+                // global 0 is memptr
+                vec![
+                    Numtype::I32 as u8,  // data type
+                    0x01,  // mutability (1 means mutable)
+                    Opcode::I32Const as u8,
+                    0x00,  // initial value
+                    Opcode::End as u8,
+                ],
+                // global 1 is memsize
+                vec![
+                    Numtype::I32 as u8,  // data type
+                    0x01,  // mutability (1 means mutable)
+                    Opcode::I32Const as u8,
+                    0x01,  // initial value
+                    Opcode::End as u8,
+                ],
+            ]
         )
     }
 
