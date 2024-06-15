@@ -24,7 +24,7 @@ fn repl() {
         rustyline::Cmd::HistorySearchForward
     );
     println!("{}", TITLE);
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(feature = "wasm_repl"))]
     let mut vm = VM::new();
     loop {
         let readline = rl.readline("\x1b[1mhenry>\x1b[0m ");
@@ -34,12 +34,12 @@ fn repl() {
                     break;
                 }
                 rl.add_history_entry(&line).unwrap();
-                #[cfg(not(feature = "wasm"))]
-                match vm.interpret(line) {
+                #[cfg(not(feature = "wasm_repl"))]
+                match vm.interpret(&line) {
                     Ok(x) => println!("{}", x),
                     Err(e) => println!("{}", e),
                 }
-                #[cfg(feature = "wasm")]
+                #[cfg(feature = "wasm_repl")]
                 match wasmize(&line, Env::default()) {
                     Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
                         Ok(x) => println!("{}", x),
@@ -64,7 +64,7 @@ fn repl() {
     rl.save_history(HISTORY_FILE).unwrap();
 }
 
-fn run_file(path: &str) {
+fn run_file(path: &str, as_wasm: bool) {
     // read file to string
     let contents = match std::fs::read_to_string(path) {
         Ok(x) => x,
@@ -73,31 +73,38 @@ fn run_file(path: &str) {
             return;
         }
     };
-    #[cfg(not(feature = "wasm"))]
-    match VM::new().interpret(contents) {
-        Ok(x) => println!("{}", x),
-        Err(e) => println!("{}", e),
-    }
-    #[cfg(feature = "wasm")]
-    match wasmize(&contents, Env::default()) {
-        Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+    if !as_wasm {
+        match VM::new().interpret(&contents) {
             Ok(x) => println!("{}", x),
-            Err(e) => println!("Runtime Error: {}", e),
-        },
-        Err(e) => println!("Compile Error: {}", e),
+            Err(e) => println!("{}", e),
+        }
+    }
+    else {
+        match wasmize(&contents, Env::default()) {
+            Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+                Ok(x) => println!("{}", x),
+                Err(e) => println!("Runtime Error: {}", e),
+            },
+            Err(e) => println!("Compile Error: {}", e),
+        }
     }
 }
 
 fn main() {
     let args = std::env::args().collect::<Vec<String>>();
 
+    let use_wasm = args.iter().any(|x| x == "--wasm");
+    if use_wasm {
+        println!("Note: wasm mode is experimental and will not apply in the REPL unless compiled with wasm_repl feature enabled");
+    }
+
     if args.len() == 1 {
         repl();
     }
     else if args.len() == 2 {
-        run_file(&args[1]);
+        run_file(&args[1], use_wasm);
     }
     else {
-        println!("Usage: `{}` for REPL or `{} <script>`", args[0], args[0]);
+        println!("Usage: `{}` for REPL or `{} <script> [--wasm]`", args[0], args[0]);
     }
 }

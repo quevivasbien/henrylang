@@ -1,6 +1,6 @@
 # henrylang
 
-`henry` is a language designed for lobsters. It is a functional language intended mostly for mathematical computation.
+`henry` is a language designed for lobsters.
 
 ## Features
 
@@ -11,10 +11,9 @@
 - Iterators are lazy.
 - Functions can be overloaded for different argument types.
 
-## Planned / in-progress
+## In-progress
 
-- ND Arrays
-- Multithreading
+- Compilation to WASM (currently supports math, non-capturing functions, custom types, and all basic data types except iterators)
 
 ## Usage examples
 
@@ -35,8 +34,8 @@ f(4)
 
 ### Compute a sum in two different ways
 ```
-mysum := |list: Iter(Int)| {
-    reduce(|acc, x| { acc + x }, list, 0)
+mysum := |iter: Iter(Int)| {
+    reduce(|acc, x| { acc + x }, iter, 0)
 }
 
 mysum(0 to 10) = sum(0 to 10)
@@ -65,4 +64,13 @@ norm := |x: Complex| {
 
 x := Complex(1.0, -1.0)
 norm(x)
+```
+
+### Pass a function to a function
+```
+func_sum := |f: Func(Int, Int), g: Func(Int, Int), x: Int| {
+    f(x) + g(x)
+}
+
+func_sum(|x: Int|{ x + 1 }, |x: Int|{ x + 2 }, 1)
 ```

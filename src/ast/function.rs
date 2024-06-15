@@ -64,8 +64,23 @@ impl Expression for Function {
     }
     fn find_vartype(&self, name: &String, _upto: *const dyn Expression) -> Result<Option<Type>, String> {
         // vartypes in block should have been already processed, since block is a child of function
+        let has_template_types = name.contains('[');
         for p in self.params.iter() {
-            if &p.name == name {
+            // Special case for when name has template types (i.e. is a function):
+            // Need to expand p.name to include template types
+            if has_template_types {
+                let p_type = p.get_type()?;
+                match &p_type {
+                    Type::Func(param_types, _) => {
+                        let p_name = format!("{}{:?}", p.name, param_types);
+                        if &p_name == name {
+                            return Ok(Some(p_type));
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            else if &p.name == name {
                 return Ok(Some(p.get_type()?));
             }
         }
@@ -92,7 +107,15 @@ impl Expression for Function {
         inner_compiler.function.name = format!("{}{:?}", self.name, self.param_types()?);
         
         for param in self.params.iter() {
-            if inner_compiler.create_variable(param.name.clone(), &param.get_type()?)?.is_some() {
+            // If parameters are functions, they need to be referred to by their expanded name (with template types)
+            let param_type = param.get_type()?;
+            let param_name = match &param_type {
+                Type::Func(param_types, _) => {
+                    format!("{}{:?}", param.name, param_types)
+                }
+                _ => param.name.clone()
+            };
+            if inner_compiler.create_variable(param_name, &param_type)?.is_some() {
                 return Err(format!(
                     "Function parameters should be in local scope"
                 ));
