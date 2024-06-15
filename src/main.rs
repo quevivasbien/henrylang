@@ -1,13 +1,31 @@
-use std::env;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use henrylang::*;
 
-fn repl(vm: &mut VM) {
+const HISTORY_FILE: &str = ".henrylang_history";
+const TITLE: &str = r#"
+oooo                                                   
+`888                                                   
+ 888 .oo.    .ooooo.  ooo. .oo.   oooo d8b oooo    ooo 
+ 888P"Y88b  d88' `88b `888P"Y88b  `888""8P  `88.  .8'  
+ 888   888  888ooo888  888   888   888       `88..8'   
+ 888   888  888    .o  888   888   888        `888'    
+o888o o888o `Y8bod8P' o888o o888o d888b        .8'     
+                                           .o..P'      
+            [ henrylang v0.4.0 ]           `Y8P'       
+"#;
+
+#[allow(unused_variables)]
+fn repl() {
     let mut rl = DefaultEditor::new().unwrap();
-    let _ = rl.load_history(".henrylang_history");
-    rl.bind_sequence(rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE), rustyline::Cmd::HistorySearchForward);
-    println!("[ henrylang v0.3.3 ]");
+    let _ = rl.load_history(HISTORY_FILE);
+    rl.bind_sequence(
+        rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE),
+        rustyline::Cmd::HistorySearchForward
+    );
+    println!("{}", TITLE);
+    #[cfg(not(feature = "wasm_repl"))]
+    let mut vm = VM::new();
     loop {
         let readline = rl.readline("\x1b[1mhenry>\x1b[0m ");
         match readline {
@@ -15,10 +33,19 @@ fn repl(vm: &mut VM) {
                 if line == "exit" {
                     break;
                 }
-                rl.add_history_entry(line.as_str()).unwrap();
-                match vm.interpret(line) {
+                rl.add_history_entry(&line).unwrap();
+                #[cfg(not(feature = "wasm_repl"))]
+                match vm.interpret(&line) {
                     Ok(x) => println!("{}", x),
                     Err(e) => println!("{}", e),
+                }
+                #[cfg(feature = "wasm_repl")]
+                match wasmize(&line, Env::default()) {
+                    Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+                        Ok(x) => println!("{}", x),
+                        Err(e) => println!("Runtime Error: {}", e)
+                    },
+                    Err(e) => println!("Compile Error: {}", e),
                 }
             },
             Err(ReadlineError::Interrupted) => {
@@ -32,11 +59,12 @@ fn repl(vm: &mut VM) {
                 break;
             }
         }
+        println!()
     }
-    rl.save_history(".henrylang_history").unwrap();
+    rl.save_history(HISTORY_FILE).unwrap();
 }
 
-fn run_file(vm: &mut VM, path: &str) {
+fn run_file(path: &str, as_wasm: bool) {
     // read file to string
     let contents = match std::fs::read_to_string(path) {
         Ok(x) => x,
@@ -45,23 +73,38 @@ fn run_file(vm: &mut VM, path: &str) {
             return;
         }
     };
-    match vm.interpret(contents) {
-        Ok(x) => println!("{}", x),
-        Err(e) => println!("{}", e),
+    if !as_wasm {
+        match VM::new().interpret(&contents) {
+            Ok(x) => println!("{}", x),
+            Err(e) => println!("{}", e),
+        }
+    }
+    else {
+        match wasmize(&contents, Env::default()) {
+            Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+                Ok(x) => println!("{}", x),
+                Err(e) => println!("Runtime Error: {}", e),
+            },
+            Err(e) => println!("Compile Error: {}", e),
+        }
     }
 }
 
 fn main() {
-    let args = env::args().collect::<Vec<String>>();
+    let args = std::env::args().collect::<Vec<String>>();
 
-    let mut vm = VM::new();
+    let use_wasm = args.iter().any(|x| x == "--wasm");
+    if use_wasm {
+        println!("Note: wasm mode is experimental and will not apply in the REPL unless compiled with wasm_repl feature enabled");
+    }
+
     if args.len() == 1 {
-        repl(&mut vm);
+        repl();
     }
     else if args.len() == 2 {
-        run_file(&mut vm, &args[1]);
+        run_file(&args[1], use_wasm);
     }
     else {
-        println!("Usage: `{}` for REPL or `{}` <script>", args[0], args[0]);
+        println!("Usage: `{}` for REPL or `{} <script> [--wasm]`", args[0], args[0]);
     }
 }

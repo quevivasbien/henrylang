@@ -73,4 +73,16 @@ impl Expression for Unary {
         };
         Ok(())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        self.right.wasmize(wasmizer)?;
+        let right_type = self.right.get_type()?;
+        match (&self.op, &right_type) {
+            (TokenType::Bang, Type::Bool) => wasmizer.write_negate(&right_type)?,
+            (TokenType::Minus, Type::Int | Type::Float) => wasmizer.write_negate(&right_type)?,
+            (TokenType::At, Type::Iter(t)) => wasmizer.write_collect(t.as_ref())?,
+            _ => return Err(format!("Unary operator {:?} not supported for type {:?}", self.op, right_type)),
+        }
+        Ok(0)
+    }
 }

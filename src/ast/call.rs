@@ -17,6 +17,29 @@ impl Call {
     fn argtypes(&self) -> Result<Vec<Type>, String> {
         self.args.iter().map(|e| e.get_type()).collect()
     }
+
+    fn validate(&self) -> Result<Type, String> {
+        let callee_type = self.callee.get_type()?;
+        let paramtypes = match callee_type.clone() {
+            Type::Func(argtypes, _) => argtypes,
+            Type::Arr(_) => vec![Type::Int],
+            Type::TypeDef(argtypes, _) => argtypes,
+            _ => return Err(format!(
+                "Cannot call an expression of type {:?}", callee_type
+            )),
+        };
+        if paramtypes.len() != self.args.len() {
+            return Err(format!("Wrong number of arguments; expected {} but got {}", paramtypes.len(), self.args.len()));
+        }
+        let argtypes = self.args.iter().map(|e| e.get_type()).collect::<Result<Vec<_>, _>>()?;
+        if paramtypes.iter().zip(argtypes.iter()).any(|(a, b)| a != b) {
+            return Err(format!(
+                "Argument types do not match; expected {:?} but got {:?}",
+                paramtypes, argtypes
+            ));
+        }
+        Ok(callee_type)
+    }
 }
 
 impl Expression for Call {
@@ -65,30 +88,39 @@ impl Expression for Call {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let callee_type = self.callee.get_type()?;
-        let paramtypes = match callee_type {
-            Type::Func(argtypes, _) => argtypes,
-            Type::Arr(_) => vec![Type::Int],
-            Type::TypeDef(argtypes, _) => argtypes,
-            _ => return Err(format!(
-                "Cannot call an expression of type {:?}", callee_type
-            )),
-        };
-        if paramtypes.len() != self.args.len() {
-            return Err(format!("Wrong number of arguments; expected {} but got {}", paramtypes.len(), self.args.len()));
-        }
-        let argtypes = self.args.iter().map(|e| e.get_type()).collect::<Result<Vec<_>, _>>()?;
-        if paramtypes.iter().zip(argtypes.iter()).any(|(a, b)| a != b) {
-            return Err(format!(
-                "Argument types do not match; expected {:?} but got {:?}",
-                paramtypes, argtypes
-            ));
-        }
+        self.validate()?;
         for arg in self.args.iter() {
             arg.compile(compiler)?;
         }
         self.callee.compile(compiler)?;
         compiler.write_opcode(OpCode::Call);
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let callee_type = self.validate()?;
+        match callee_type {
+            Type::Func(..) | Type::TypeDef(..) => {
+                for arg in self.args.iter() {
+                    arg.wasmize(wasmizer)?;
+                }
+                let is_global = self.callee.wasmize(wasmizer)?;
+                if is_global == 0 {
+                    wasmizer.call_indirect(&callee_type)?;
+                }
+                else {
+                    wasmizer.call()?;
+                }
+            }
+            Type::Arr(array_type) => {
+                self.callee.wasmize(wasmizer)?;
+                for arg in self.args.iter() {
+                    arg.wasmize(wasmizer)?;
+                }
+                wasmizer.get_array_entry(array_type.as_ref())?;
+            }
+            _ => return Err(format!("Cannot call an expression of type {:?}", callee_type)),
+        }
+        Ok(0)
     }
 }

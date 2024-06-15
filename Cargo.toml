@@ -1,6 +1,6 @@
 [package]
 name = "henrylang"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,7 +13,7 @@ enum-iterator = "2.0.0"
 lazy_static = "1.4.0"
 rustc-hash = "1.1.0"
 rustyline = "14.0.0"
-stdio = "0.1.0"
+wasmer = "4.2.8"
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -24,5 +24,5 @@ name = "benchmark"
 harness = false
 
 [features]
-default = []
 debug = []
+wasm_repl = []

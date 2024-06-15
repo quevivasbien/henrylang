@@ -60,4 +60,16 @@ impl Expression for Block {
         self.expressions.last().unwrap().compile(compiler)?;
         compiler.end_scope(self.get_type()?.is_heap())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        wasmizer.begin_scope(&self.get_type()?)?;
+        for (i, e) in self.expressions.iter().enumerate() {
+            e.wasmize(wasmizer)?;
+            if i < self.expressions.len() - 1 {
+                wasmizer.write_drop();
+            }
+        }
+        wasmizer.end_scope()?;
+        Ok(0)
+    }
 }

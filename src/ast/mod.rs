@@ -34,7 +34,7 @@ pub use variable::*;
 
 use downcast_rs::{Downcast, impl_downcast};
 
-use crate::compiler::Compiler;
+use crate::{compiler::Compiler, wasmizer::Wasmizer};
 
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -86,6 +86,10 @@ pub trait Expression: std::fmt::Debug + Downcast {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String>;
+    #[allow(unused_variables)]
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        Err(format!("wasmize not implemented for {}", std::any::type_name::<Self>()))
+    }
 }
 
 impl_downcast!(Expression);
@@ -122,7 +126,7 @@ pub struct ErrorExpression;
 
 impl Expression for ErrorExpression {
     fn get_type(&self) -> Result<Type, String> {
-        Err("ErrorExpressions have no type".to_string()).unwrap()
+        Err("ErrorExpressions have no type".to_string())
     }
     fn set_parent(&mut self, _parent: Option<*const dyn Expression>) -> Result<(), String> {
         Ok(())

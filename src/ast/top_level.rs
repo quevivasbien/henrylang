@@ -43,4 +43,11 @@ impl Expression for ASTTopLevel {
         compiler.write_opcode(OpCode::Return);
         Ok(())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        wasmizer.init_func("main".to_string(), &[], &self.get_type()?, true)?;
+        self.child.wasmize(wasmizer)?;
+        wasmizer.finish_func()?;
+        Ok(0)
+    }
 }

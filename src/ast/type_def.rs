@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::wasmizer::structs::Struct;
 use crate::values::{self, HeapValue};
 
 use super::*;
@@ -63,5 +64,11 @@ impl Expression for TypeDef {
             values::TypeDef::new(self.name.clone(), fields)
         ));
         compiler.write_heap_constant(typedef)
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let struct_def = Struct::new(self.field_types()?);
+        wasmizer.create_struct(self.name.clone(), struct_def, true)?;
+        Ok(0)
     }
 }

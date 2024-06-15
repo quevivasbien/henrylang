@@ -51,4 +51,12 @@ impl Expression for GetField {
         compiler.write_opcode(OpCode::Call);
         Ok(())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let _typ = self.get_type()?;
+        self.object.wasmize(wasmizer)?;
+        let object_type = self.object.get_type()?;
+        wasmizer.get_field(object_type, &self.field)?;
+        Ok(0)
+    }
 }

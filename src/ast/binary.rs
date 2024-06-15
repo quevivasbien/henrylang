@@ -136,4 +136,36 @@ impl Expression for Binary {
         };
         Ok(())
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+
+        if left_type != right_type {
+            return Err(format!(
+                "Operands for operator {:?} must be of the same type; got {:?} and {:?}",
+                self.op, left_type, right_type
+            ));
+        }
+
+        self.left.wasmize(wasmizer)?;
+        self.right.wasmize(wasmizer)?;
+        match self.op {
+            TokenType::Eq => wasmizer.write_equal(&left_type),
+            TokenType::NEq => wasmizer.write_not_equal(&left_type),
+            TokenType::GT => wasmizer.write_greater(&left_type),
+            TokenType::GEq => wasmizer.write_greater_equal(&left_type),
+            TokenType::LT => wasmizer.write_less(&left_type),
+            TokenType::LEq => wasmizer.write_less_equal(&left_type),
+            TokenType::Plus => wasmizer.write_add(&left_type),
+            TokenType::Minus => wasmizer.write_sub(&left_type),
+            TokenType::Star => wasmizer.write_mul(&left_type),
+            TokenType::Slash => wasmizer.write_div(&left_type),
+            TokenType::And => wasmizer.write_and(&left_type),
+            TokenType::Or => wasmizer.write_or(&left_type),
+            TokenType::To => wasmizer.write_range(&left_type),
+            _ => return Err(format!("Operator {:?} not supported", self.op)),
+        }?;
+        Ok(0)
+    }
 }
