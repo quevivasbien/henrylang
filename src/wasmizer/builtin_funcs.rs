@@ -19,9 +19,11 @@ pub struct BuiltinFunc {
 impl BuiltinFunc {
     pub fn new(signature: FuncTypeSignature, param_names: Vec<String>) -> Self {
         assert_eq!(param_names.len(), signature.args.len());
-        let params = param_names.into_iter().zip(signature.args.iter()).map(
-            |(name, &numtype)| LocalVar { name, numtype }
-        ).collect();
+        let params = param_names
+            .into_iter()
+            .zip(signature.args.iter())
+            .map(|(name, &numtype)| LocalVar { name, numtype })
+            .collect();
         Self {
             signature,
             params,
@@ -103,16 +105,16 @@ impl BuiltinFunc {
         self.write_var(fatptr_name);
         self.write_opcode(Opcode::I64Const);
         self.write_byte(0x20);
-        self.write_opcode(Opcode::I64ShrU);  // shift right 32 bits
-        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
+        self.write_opcode(Opcode::I64ShrU); // shift right 32 bits
+        self.write_opcode(Opcode::I32WrapI64); // discard high 32 bits
         self.write_opcode(Opcode::LocalSet);
-        self.write_var(offset_name);  // set as offset
-        // size = lowest 32 bits of fatptr
+        self.write_var(offset_name); // set as offset
+                                     // size = lowest 32 bits of fatptr
         self.write_opcode(Opcode::LocalGet);
         self.write_var(fatptr_name);
-        self.write_opcode(Opcode::I32WrapI64);  // discard high 32 bits
+        self.write_opcode(Opcode::I32WrapI64); // discard high 32 bits
         self.write_opcode(Opcode::LocalSet);
-        self.write_var(size_name);  // set as size
+        self.write_var(size_name); // set as size
     }
 
     // creates fatptr value of offset << 32 + size
@@ -170,15 +172,15 @@ lazy_static! {
                 FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
                 vec!["size".to_string()]
             );
-    
+
             func.add_local("offset", Numtype::I32);
-    
+
             // get memptr (start of next memory chunk)
             func.write_opcode(Opcode::GlobalGet);
             func.write_byte(0x00);
             func.write_opcode(Opcode::LocalSet);
             func.write_var("offset");  // save_location as value to return
-    
+
             // set memptr to end of new memory chunk (memptr = memptr + size)
             func.write_opcode(Opcode::GlobalGet);
             func.write_byte(0x00);
@@ -187,48 +189,16 @@ lazy_static! {
             func.write_opcode(Opcode::I32Add);
             func.write_opcode(Opcode::GlobalSet);
             func.write_byte(0x00);
-    
+
             // return start of the new memory chunk
             func.write_opcode(Opcode::LocalGet);
             func.write_var("offset");
-    
+
             func.write_opcode(Opcode::End);
-    
+
             func
         };
         map.insert("alloc".to_string(), alloc);
-    
-        // let free = {
-        //     let mut func = BuiltinFunc::new(
-        //         FuncTypeSignature::default(),
-        //         vec![]
-        //     );
-    
-        //     // memptr = memptr - (*memptr + 4)
-        //     // get memptr
-        //     func.write_opcode(Opcode::GlobalGet);
-        //     func.write_byte(0x00);
-        //     // load *memptr
-        //     func.write_opcode(Opcode::GlobalGet);
-        //     func.write_byte(0x00);
-        //     func.write_opcode(Opcode::I32Load);
-        //     func.write_byte(0x02);  // alignment
-        //     func.write_byte(0x00);  // load offset
-        //     // + 4
-        //     func.write_opcode(Opcode::I32Const);
-        //     func.write_byte(0x04);
-        //     func.write_opcode(Opcode::I32Add);
-        //     // - (*memptr + 4)
-        //     func.write_opcode(Opcode::I32Sub);
-        //     // set memptr
-        //     func.write_opcode(Opcode::GlobalSet);
-        //     func.write_byte(0x00);
-    
-        //     func.write_opcode(Opcode::End);
-    
-        //     func
-        // };
-        // map.insert("free".to_string(), free);
 
         let copy_heap_obj = {
             let mut func = BuiltinFunc::new(
@@ -396,7 +366,7 @@ lazy_static! {
                 vec!["obj".to_string(), "field_offset".to_string()]
             );
             func.add_local("obj_offset", Numtype::I32);
-            
+
             // obj_offset = obj >> 32
             func.write_opcode(Opcode::LocalGet);
             func.write_var("obj");
@@ -426,7 +396,7 @@ lazy_static! {
                 vec!["obj".to_string(), "field_offset".to_string()]
             );
             func.add_local("obj_offset", Numtype::I32);
-            
+
             // obj_offset = obj >> 32
             func.write_opcode(Opcode::LocalGet);
             func.write_var("obj");
@@ -456,7 +426,7 @@ lazy_static! {
                 vec!["obj".to_string(), "field_offset".to_string()]
             );
             func.add_local("obj_offset", Numtype::I32);
-            
+
             // obj_offset = obj >> 32
             func.write_opcode(Opcode::LocalGet);
             func.write_var("obj");

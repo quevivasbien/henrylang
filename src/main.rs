@@ -21,7 +21,7 @@ fn repl() {
     let _ = rl.load_history(HISTORY_FILE);
     rl.bind_sequence(
         rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE),
-        rustyline::Cmd::HistorySearchForward
+        rustyline::Cmd::HistorySearchForward,
     );
     println!("{}", TITLE);
     #[cfg(not(feature = "wasm"))]
@@ -43,17 +43,17 @@ fn repl() {
                 match wasmize(&line, Env::default()) {
                     Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
                         Ok(x) => println!("{}", x),
-                        Err(e) => println!("Runtime Error: {}", e)
+                        Err(e) => println!("Runtime Error: {}", e),
                     },
                     Err(e) => println!("Compile Error: {}", e),
                 }
-            },
+            }
             Err(ReadlineError::Interrupted) => {
                 println!("Cancelled");
-            },
+            }
             Err(ReadlineError::Eof) => {
                 break;
-            },
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
                 break;
@@ -93,11 +93,9 @@ fn main() {
 
     if args.len() == 1 {
         repl();
-    }
-    else if args.len() == 2 {
+    } else if args.len() == 2 {
         run_file(&args[1]);
-    }
-    else {
+    } else {
         println!("Usage: `{}` for REPL or `{} <script>`", args[0], args[0]);
     }
 }
