@@ -38,4 +38,10 @@ impl Struct {
             size: offset,
         }
     }
+
+    pub fn get_field(&self, name: &str) -> Option<&StructField> {
+        self.fields
+            .iter()
+            .find_map(|(n, f)| if n == name { Some(f) } else { None })
+    }
 }

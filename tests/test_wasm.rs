@@ -75,4 +75,9 @@ fn test_ranges() {
 #[test]
 fn test_map() {
     assert_eq!(run("@(|x: Int| {x + 1} -> 0 to 3)"), "[1, 2, 3, 4]");
+    assert_eq!(run("f := |x: Int| {x + 1} iter := f -> f -> 0 to 3 @iter"), "[2, 3, 4, 5]");
+    assert_eq!(run("f := |x: Int| {x + 1} iter := f -> [0, 1, 2, 3] @iter"), "[1, 2, 3, 4]");
+    assert_eq!(run("f := |x: Int| { 1.0 } iter := f -> 0 to 3 @iter"), "[1.0, 1.0, 1.0, 1.0]");
+    assert_eq!(run("f := |x: Float| { x + 1.0 } iter := f -> [0.0, 1.0] @iter"), "[1.0, 2.0]");
+    assert_eq!(run("f := |x: Str| { x + \"!\" } iter := f -> [\"hello\", \"world\"] @iter"), "[hello!, world!]");
 }

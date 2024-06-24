@@ -91,25 +91,17 @@ impl Expression for Map {
         self.left.wasmize(wasmizer)?;
         self.right.wasmize(wasmizer)?;
 
-        if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
-            match &left_type {
-                Type::Arr(_) => {
-                    unimplemented!("map from array")
-                },
-                Type::Func(arg_type, _) => {
-                    if arg_type.len() != 1 {
-                        return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
-                    }
-                    if &arg_type[0] != arr_type.as_ref() {
-                        return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
-                    }
-                },
-                typ => return Err(format!("Cannot map with type {:?}", typ)),
-            }
-            wasmizer.write_map(&left_type)?;
-            return Ok(0);
+        
+        match &left_type {
+            Type::Arr(_) => {
+                unimplemented!("map from array")
+            },
+            Type::Func(..) => {
+                wasmizer.write_map(&left_type, &right_type)?;
+            },
+            typ => return Err(format!("Cannot map with type {:?}", typ)),
         }
-        return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
+        return Ok(0);
     }
 }
 
