@@ -70,7 +70,7 @@ impl Expression for Map {
                 },
                 Type::Func(arg_type, _) => {
                     if arg_type.len() != 1 {
-                        return Err(format!("Cannot map with a function does not have a single argument; got a function with {} arguments", arg_type.len()));
+                        return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
                     }
                     if &arg_type[0] != arr_type.as_ref() {
                         return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
@@ -80,6 +80,34 @@ impl Expression for Map {
             }
             compiler.write_opcode(OpCode::Map);
             return Ok(());
+        }
+        return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+
+        self.left.wasmize(wasmizer)?;
+        self.right.wasmize(wasmizer)?;
+
+        if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
+            match &left_type {
+                Type::Arr(_) => {
+                    unimplemented!("map from array")
+                },
+                Type::Func(arg_type, _) => {
+                    if arg_type.len() != 1 {
+                        return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
+                    }
+                    if &arg_type[0] != arr_type.as_ref() {
+                        return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
+                    }
+                },
+                typ => return Err(format!("Cannot map with type {:?}", typ)),
+            }
+            wasmizer.write_map(&left_type)?;
+            return Ok(0);
         }
         return Err(format!("Operand on right of '->' must be an array type; got {:?}", right_type));
     }

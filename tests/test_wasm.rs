@@ -71,3 +71,8 @@ fn test_ranges() {
     assert_eq!(run("@(0 to 3)"), "[0, 1, 2, 3]");
     assert_eq!(run("@(0 to -3)"), "[0, -1, -2, -3]");
 }
+
+#[test]
+fn test_map() {
+    assert_eq!(run("@(|x: Int| {x + 1} -> 0 to 3)"), "[1, 2, 3, 4]");
+}
