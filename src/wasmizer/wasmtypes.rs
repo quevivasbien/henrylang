@@ -49,6 +49,33 @@ impl Numtype {
             Self::I64 => 8,
         }
     }
+
+    pub fn const_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Const,
+            Self::I32 => Opcode::I32Const,
+            Self::I64 => Opcode::I64Const,
+            Self::Void => panic!("Cannot create const of void type"),
+        }
+    }
+
+    pub fn load_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Load,
+            Self::I32 => Opcode::I32Load,
+            Self::I64 => Opcode::I64Load,
+            Self::Void => panic!("Cannot load void type"),
+        }
+    }
+
+    pub fn store_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Store,
+            Self::I32 => Opcode::I32Store,
+            Self::I64 => Opcode::I64Store,
+            Self::Void => panic!("Cannot store void type"),
+        }
+    }
 }
 
 impl std::fmt::Display for Numtype {

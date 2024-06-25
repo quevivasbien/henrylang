@@ -80,4 +80,5 @@ fn test_map() {
     assert_eq!(run("f := |x: Int| { 1.0 } iter := f -> 0 to 3 @iter"), "[1.0, 1.0, 1.0, 1.0]");
     assert_eq!(run("f := |x: Float| { x + 1.0 } iter := f -> [0.0, 1.0] @iter"), "[1.0, 2.0]");
     assert_eq!(run("f := |x: Str| { x + \"!\" } iter := f -> [\"hello\", \"world\"] @iter"), "[hello!, world!]");
+    assert_eq!(run("@(|x: Int| { @(0 to x) } -> 0 to 3)"), "[[0], [0, 1], [0, 1, 2], [0, 1, 2, 3]]");
 }
