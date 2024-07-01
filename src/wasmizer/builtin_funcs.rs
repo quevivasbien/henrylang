@@ -166,7 +166,6 @@ lazy_static! {
     pub static ref BUILTINS: FxHashMap<String, BuiltinFunc> = {
         let mut map = FxHashMap::default();
 
-        // TODO: allow this to grow to more pages and raise error if out of memory
         let alloc = {
             let mut func = BuiltinFunc::new(
                 FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
@@ -174,6 +173,7 @@ lazy_static! {
             );
 
             func.add_local("offset", Numtype::I32);
+            func.add_local("current_capacity", Numtype::I32);  // stores the current memory capacity in bytes
 
             // get memptr (start of next memory chunk)
             func.write_opcode(Opcode::GlobalGet);
@@ -190,6 +190,38 @@ lazy_static! {
             func.write_opcode(Opcode::GlobalSet);
             func.write_byte(0x00);
 
+            // get memory capacity in bytes
+            func.write_opcode(Opcode::MemorySize);
+            func.write_byte(0x00);
+            func.write_opcode(Opcode::I32Const);
+            func.write_slice(&unsigned_leb128(65536));
+            func.write_opcode(Opcode::I32Mul);
+            func.write_opcode(Opcode::LocalTee);
+            func.write_var("current_capacity");
+
+            // if memptr > memory capacity, grow memory
+            func.write_opcode(Opcode::GlobalGet);
+            func.write_byte(0x00);
+            func.write_opcode(Opcode::I32LeU);
+            func.write_opcode(Opcode::If);
+            func.write_byte(Numtype::Void as u8);
+            // amount to grow is (memptr - memory capacity + 65536) / 65536
+            func.write_opcode(Opcode::GlobalGet);
+            func.write_byte(0x00);
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("current_capacity");
+            func.write_opcode(Opcode::I32Sub);
+            func.write_opcode(Opcode::I32Const);
+            func.write_slice(&unsigned_leb128(65536));
+            func.write_opcode(Opcode::I32Add);
+            func.write_opcode(Opcode::I32Const);
+            func.write_slice(&unsigned_leb128(65536));
+            func.write_opcode(Opcode::I32DivU);
+            func.write_opcode(Opcode::MemoryGrow);
+            func.write_byte(0x00);
+            func.write_opcode(Opcode::Drop);  // TODO: Handle when grow fails (= -1)
+            func.write_opcode(Opcode::End);  // end if
+
             // return start of the new memory chunk
             func.write_opcode(Opcode::LocalGet);
             func.write_var("offset");
@@ -200,28 +232,29 @@ lazy_static! {
         };
         map.insert("alloc".to_string(), alloc);
 
-        let copy_heap_obj = {
-            let mut func = BuiltinFunc::new(
-                FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I64)),
-                vec!["fatptr".to_string()]
-            );
+        // // Copies a heap object and returns a new fatptr for the object
+        // let copy_heap_obj = {
+        //     let mut func = BuiltinFunc::new(
+        //         FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I64)),
+        //         vec!["fatptr".to_string()]
+        //     );
 
-            func.add_local("offset", Numtype::I32);
-            func.add_local("size", Numtype::I32);
+        //     func.add_local("offset", Numtype::I32);
+        //     func.add_local("size", Numtype::I32);
 
-            func.set_offset_and_size("fatptr", "offset", "size");
-            func.copy_mem("offset", "size");
+        //     func.set_offset_and_size("fatptr", "offset", "size");
+        //     func.copy_mem("offset", "size");
 
-            func.align_memptr();
+        //     func.align_memptr();
 
-            // return [offset, size]
-            func.create_fatptr("offset", "size");
+        //     // return [offset, size]
+        //     func.create_fatptr("offset", "size");
 
-            func.write_opcode(Opcode::End);
+        //     func.write_opcode(Opcode::End);
 
-            func
-        };
-        map.insert("copy_heap_obj".to_string(), copy_heap_obj);
+        //     func
+        // };
+        // map.insert("copy_heap_obj".to_string(), copy_heap_obj);
 
         let concat_heap_objs = {
             let mut func = BuiltinFunc::new(

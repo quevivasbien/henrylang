@@ -60,7 +60,6 @@ struct WasmFunc {
     signature: FuncTypeSignature,
     param_names: Vec<String>,
     locals: LocalData,
-    allocs: Vec<u32>, // number of allocs for each scope depth
     bytes: Vec<u8>,
     export: bool,
 }
@@ -72,7 +71,6 @@ impl WasmFunc {
             signature,
             param_names: vec![],
             locals: Default::default(),
-            allocs: vec![],
             bytes: vec![],
             export,
         }
@@ -160,10 +158,6 @@ impl Wasmizer {
         self.write_opcode(Opcode::Call);
         self.bytes_mut().append(&mut unsigned_leb128(idx));
         Ok(())
-    }
-
-    fn increment_n_allocs(&mut self) {
-        *self.current_func_mut().allocs.last_mut().unwrap() += 1;
     }
 
     fn align_memptr(&mut self) {
@@ -270,31 +264,14 @@ impl Wasmizer {
         let func = WasmFunc::new(name, FuncTypeSignature::new(args, Some(ret)), export);
         self.frames.push(func);
 
-        // create a local to store the value of the memptr at the start of the function.
-        // at the end of the function, the memptr will be set back to this value
-        let idx = self.add_local("<memptr_at_start>", Numtype::I32);
-        self.write_opcode(Opcode::GlobalGet);
-        self.write_byte(0x00);
-        self.write_opcode(Opcode::LocalSet);
-        self.write_slice(&idx);
-
         Ok(())
     }
     pub fn finish_func(&mut self) -> Result<u32, String> {
         #[cfg(feature = "debug")]
-        self.print_mem();
-        // set memptr back to what it was at the start of the function
-        let memptr_at_start_idx = self
-            .current_func()
-            .get_local_idx("<memptr_at_start>")
-            .unwrap();
-        self.write_opcode(Opcode::LocalGet);
-        self.write_slice(&unsigned_leb128(memptr_at_start_idx));
-        self.write_opcode(Opcode::GlobalSet);
-        self.write_byte(0x00);
-        #[cfg(feature = "debug")]
         {
-            // print memptr
+            // Print contents of memory
+            self.print_mem();
+            // Print memptr
             self.write_opcode(Opcode::GlobalGet);
             self.write_byte(0x00);
             self.call_builtin("print[Int]").unwrap();
@@ -613,19 +590,10 @@ impl Wasmizer {
         unsigned_leb128(i)
     }
 
-    // assumes fatptr to object to copy is last thing on stack
-    fn copy_heap_object(&mut self) -> Result<(), String> {
-        self.call_builtin("copy_heap_obj")?;
-        self.increment_n_allocs();
-
-        Ok(())
-    }
-
     // concatenate two heap objects (e.g. arrays, strings)
     // the fatptrs indices to the objects should be the two last things on the stack when calling this
     fn concat_heap_objects(&mut self) -> Result<(), String> {
         self.call_builtin("concat_heap_objs")?;
-        self.increment_n_allocs();
         Ok(())
     }
 
@@ -649,7 +617,6 @@ impl Wasmizer {
         self.bytes_mut()
             .append(&mut unsigned_leb128(len as u32 * memsize));
         self.call_builtin("alloc")?;
-        self.increment_n_allocs();
         // alloc will return index of start pos -- set startptr and memptr to that index
         self.write_opcode(Opcode::LocalTee);
         self.bytes_mut().extend(&startptr_idx);
@@ -663,8 +630,11 @@ impl Wasmizer {
             Numtype::F32 => Opcode::F32Store,
             _ => Opcode::I64Store,
         };
-        // TODO: If values are heap types, they need to be copied here
         for _ in 0..len {
+            // // If values are heap types, they need to be copied here
+            // if numtype == Numtype::I64 {
+            //     self.call_builtin("copy_heap_obj")?;
+            // }
             self.write_to_memory(&memptr_idx, &value_idx, store_op, memsize as u8)?;
         }
 
@@ -713,8 +683,6 @@ impl Wasmizer {
         self.write_byte(0x00);
 
         self.align_memptr();
-
-        self.increment_n_allocs();
 
         // return [offset, size]
         self.write_opcode(Opcode::LocalGet);
@@ -769,7 +737,6 @@ impl Wasmizer {
 
     pub fn begin_scope(&mut self, typ: &ast::Type) -> Result<(), String> {
         self.locals_mut().scope_depth += 1;
-        self.current_func_mut().allocs.push(0);
         if self.locals().scope_depth > 0 {
             self.write_opcode(Opcode::Block);
             self.write_byte(Numtype::from_ast_type(typ)? as u8)
@@ -801,11 +768,11 @@ impl Wasmizer {
         let typ = Numtype::from_ast_type(typ)? as u8;
         Ok(self.locals_mut().add_local(name, typ) + self.current_func().n_params())
     }
-    pub fn set_variable(&mut self, idx: u32, typ: &ast::Type) -> Result<(), String> {
-        // if typ is a heap-allocated type, we also need to copy the memory
-        if Numtype::from_ast_type(typ)? == Numtype::I64 {
-            self.copy_heap_object()?;
-        }
+    pub fn set_variable(&mut self, idx: u32, _typ: &ast::Type) -> Result<(), String> {
+        // // if typ is a heap-allocated type, we also need to copy the memory
+        // if Numtype::from_ast_type(typ)? == Numtype::I64 {
+        //     self.call_builtin("copy_heap_obj")?;
+        // }
         self.write_opcode(Opcode::LocalTee);
         self.bytes_mut().append(&mut unsigned_leb128(idx));
 
@@ -911,19 +878,19 @@ impl Wasmizer {
             fieldnames,
         );
 
-        // copy memory for all the heap fields
-        let copy_idx = unsigned_leb128(*self.builtins.get("copy_heap_obj").unwrap());
-        for (name, field) in struct_def.fields.iter() {
-            if field.nt != Numtype::I64 {
-                continue;
-            }
-            func.write_opcode(Opcode::LocalGet);
-            func.write_var(name);
-            func.write_opcode(Opcode::Call);
-            func.write_slice(&copy_idx);
-            func.write_opcode(Opcode::LocalSet);
-            func.write_var(name);
-        }
+        // // copy memory for all the heap fields
+        // let copy_idx = unsigned_leb128(*self.builtins.get("copy_heap_obj").unwrap());
+        // for (name, field) in struct_def.fields.iter() {
+        //     if field.nt != Numtype::I64 {
+        //         continue;
+        //     }
+        //     func.write_opcode(Opcode::LocalGet);
+        //     func.write_var(name);
+        //     func.write_opcode(Opcode::Call);
+        //     func.write_slice(&copy_idx);
+        //     func.write_opcode(Opcode::LocalSet);
+        //     func.write_var(name);
+        // }
 
         func.add_local("<offset>", Numtype::I32);
         func.add_local("<size>", Numtype::I32);
@@ -1249,7 +1216,12 @@ impl Wasmizer {
         func.write_slice(&map_fn_signature);
         func.write_byte(0x00); // table index
 
-        // TODO: When the current value is an I64, we need to also copy the memory for that value
+        // // When the current value is an I64 (heap object), we need to also copy the memory for that value
+        // if in_type == Numtype::I64 {
+        //     func.write_opcode(Opcode::Call);
+        //     let copy_heap_obj_idx = self.builtins.get("copy_heap_obj").unwrap();
+        //     func.write_slice(&unsigned_leb128(*copy_heap_obj_idx));
+        // }
 
         // set as new current value
         func.write_opcode(Opcode::LocalSet);
@@ -1368,7 +1340,12 @@ impl Wasmizer {
         func.write_opcode(load_op);
         func.write_slice(&[0x02, 0x00]);
 
-        // TODO: When the current value is an I64, we need to also copy the memory for that value
+        // // If the current value is a heap type, we need to copy it
+        // if numtype == Numtype::I64 {
+        //     func.write_opcode(Opcode::Call);
+        //     let copy_heap_obj_idx = self.builtins.get("copy_heap_obj").unwrap();
+        //     func.write_slice(&unsigned_leb128(*copy_heap_obj_idx));
+        // }
 
         // set this as the new current value
         func.write_opcode(Opcode::LocalSet);

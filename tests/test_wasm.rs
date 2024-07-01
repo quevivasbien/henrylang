@@ -57,6 +57,7 @@ fn test_functions() {
     assert_eq!(run("f := |x: Int, y: Int| { x + y } f(1, 2)"), "3");
     assert_eq!(run("f := |x: Arr(Int), i: Int| { x(i) } f([1, 2, 3], 1)"), "2");
     assert_eq!(run("f := |x: Str, y: Str| { x + y } f(\"hello\", \"world\")"), "helloworld");
+    assert_eq!(run("f := ||{[\"henry\",\"lenry\"]} x:=f() [121,122,188,100] x"), "[henry, lenry]");
 }
 
 #[test]
