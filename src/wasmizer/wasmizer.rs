@@ -1451,6 +1451,8 @@ impl Wasmizer {
         func.add_local("element_offset", Numtype::I32);
         func.add_local("alloc_size", Numtype::I32);
         func.add_local("current", numtype);
+        func.add_local("array_size", Numtype::I32);
+        func.add_local("new_array_offset", Numtype::I32);
 
         let memsize = numtype.size();
         let load_op = numtype.load_op();
@@ -1466,26 +1468,24 @@ impl Wasmizer {
         func.write_opcode(Opcode::LocalSet);
         func.write_var("iter_offset");
 
-        // start by allocating space for 1 element
+        // start by allocating space for 2 elements
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(1 * memsize));
+        func.write_slice(&unsigned_leb128(2 * memsize));
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("alloc_size");
         func.write_opcode(Opcode::Call);
         let alloc_idx = unsigned_leb128(*self.builtins.get("alloc").unwrap());
         func.write_slice(&alloc_idx);
         func.write_opcode(Opcode::LocalTee);
         func.write_var("array_offset");
+        func.write_opcode(Opcode::Call); func.write_byte(0);
         func.write_opcode(Opcode::LocalSet);
         func.write_var("element_offset");
-
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(2 * memsize));
-        func.write_opcode(Opcode::LocalSet);
-        func.write_var("alloc_size");
 
         // loop:
         // if iterator->advance():
         //   *element_offset = iter_offset->current
-        //   element_offset += 4
+        //   element_offset += memsize
         //   if element_offset >= memptr, allocate more space
         //   branch to loop
 
@@ -1538,36 +1538,70 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // add memsize to element_offset
+        func.write_opcode(Opcode::I32Const); func.write_byte(69); func.write_opcode(Opcode::Call); func.write_byte(0); func.write_opcode(Opcode::Drop);
         func.write_opcode(Opcode::LocalGet);
         func.write_var("element_offset");
+        func.write_opcode(Opcode::Call); func.write_byte(0);
         func.write_opcode(Opcode::I32Const);
         func.write_slice(&unsigned_leb128(memsize));
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::LocalTee);
         func.write_var("element_offset");
+        func.write_opcode(Opcode::Call); func.write_byte(0);
 
-        // if element_offset >= memptr, allocate more space
-        func.write_opcode(Opcode::GlobalGet);
-        func.write_byte(0x00);
+        // if element_offset >= array_offset + alloc_size, allocate more space
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("array_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("alloc_size");
+        func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32GeU);
         func.write_opcode(Opcode::If);
         func.write_byte(Numtype::Void as u8);
 
-        // allocate
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("alloc_size");
-        func.write_opcode(Opcode::Call);
-        func.write_slice(&alloc_idx);
-        func.write_opcode(Opcode::Drop);
-
-        // double alloc size
+        // double alloc size and allocate new space
         func.write_opcode(Opcode::LocalGet);
         func.write_var("alloc_size");
         func.write_opcode(Opcode::I32Const);
         func.write_byte(2);
         func.write_opcode(Opcode::I32Mul);
-        func.write_opcode(Opcode::LocalSet);
+        func.write_opcode(Opcode::LocalTee);
         func.write_var("alloc_size");
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&alloc_idx);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("new_array_offset");
+
+        // copy old array to new spot
+        // destination is new_array_offset
+        // source address is `array_offset` (old array offset)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("array_offset");
+        // amount to copy is array size (equal to element_offset - array_offset)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("element_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("array_offset");
+        func.write_opcode(Opcode::I32Sub);
+        func.write_slice(&MEMCOPY);
+        
+        // set element_offset to new_array_offset + (element_offset - array_offset)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("new_array_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("element_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("array_offset");
+        func.write_opcode(Opcode::I32Sub);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("element_offset");
+
+        // set array_offset to new_array_offset
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("new_array_offset");
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("array_offset");
 
         func.write_opcode(Opcode::End); // end if
 
