@@ -119,7 +119,7 @@ impl Expression for Map {
 #[derive(Debug)]
 pub struct Reduce {
     function: Box<dyn Expression>,
-    array: Box<dyn Expression>,
+    iter_over: Box<dyn Expression>,
     init: Box<dyn Expression>,
     parent: Option<*const dyn Expression>,
 }
@@ -127,12 +127,12 @@ pub struct Reduce {
 impl Reduce {
     pub fn new(
         function: Box<dyn Expression>,
-        array: Box<dyn Expression>,
+        iter_over: Box<dyn Expression>,
         init: Box<dyn Expression>,
     ) -> Self {
         Self {
             function,
-            array,
+            iter_over,
             init,
             parent: None,
         }
@@ -140,7 +140,7 @@ impl Reduce {
 
     // get the types of the result, the type contained in the array or iterator object iterated over, and whether that object is an array (as opposed to an iterator)
     // returns (result_type, array_type, is_array)
-    fn get_types(&self) -> Result<(Type, Type, bool), String> {
+    fn get_type_info(&self) -> Result<(Type, Type, bool), String> {
         let (func_arg_types, func_ret_type) = match self.function.get_type()? {
             Type::Func(arg, ret) => (arg, *ret),
             x => return Err(format!("Reduce function must be a function; got a {:?}", x)),
@@ -153,9 +153,9 @@ impl Reduce {
         };
         let acc_type = func_arg_types[0].clone();
         let x_type = func_arg_types[1].clone();
-        let iter_over_type = self.array.get_type()?;
+        let iter_over_type = self.iter_over.get_type()?;
         let iter_over_is_array = matches!(iter_over_type, Type::Arr(_));
-        let array_type = match iter_over_type {
+        let iter_over_inner_type = match iter_over_type {
             Type::Arr(x) | Type::Iter(x) => *x,
             x => {
                 return Err(format!(
@@ -164,9 +164,9 @@ impl Reduce {
                 ))
             }
         };
-        if array_type != x_type {
+        if iter_over_inner_type != x_type {
             return Err(format!(
-                "Second argument of reduce function and array must have the same type; got {:?} and {:?}", x_type, array_type
+                "Second argument of reduce function and array must have the same type; got {:?} and {:?}", x_type, iter_over_inner_type
             ));
         }
         let init_type = self.init.get_type()?;
@@ -181,29 +181,29 @@ impl Reduce {
 
 impl Expression for Reduce {
     fn get_type(&self) -> Result<Type, String> {
-        let (acc_type, _, _) = self.get_types()?;
+        let (acc_type, _, _) = self.get_type_info()?;
         Ok(acc_type)
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         self.function.set_parent(Some(self_ptr))?;
-        self.array.set_parent(Some(self_ptr))?;
+        self.iter_over.set_parent(Some(self_ptr))?;
         self.init.set_parent(Some(self_ptr))?;
 
         // name to do same special handling for function that we do for callee in Call expression
         let inittype = self.init.get_type()?;
-        let arrtype = match self.array.get_type()? {
+        let iter_over_type = match self.iter_over.get_type()? {
             Type::Arr(t) | Type::Iter(t) => *t,
             _ => {
                 return Err(format!(
                     "Cannot use '->' with type {:?} on right",
-                    self.array.get_type()?
+                    self.iter_over.get_type()?
                 ))
             }
         };
         if let Some(var) = self.function.downcast_mut::<Variable>() {
-            var.set_template_types(vec![inittype, arrtype])?;
+            var.set_template_types(vec![inittype, iter_over_type])?;
         }
         Ok(())
     }
@@ -214,17 +214,17 @@ impl Expression for Reduce {
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
         let _ = self.get_type()?; // check that types are all in order
         self.init.compile(compiler)?;
-        self.array.compile(compiler)?;
+        self.iter_over.compile(compiler)?;
         self.function.compile(compiler)?;
         compiler.write_opcode(OpCode::Reduce);
         Ok(())
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
-        let (acc_type, x_type, use_array_iter) = self.get_types()?;
+        let (acc_type, x_type, use_array_iter) = self.get_type_info()?;
         self.function.wasmize(wasmizer)?;
         self.init.wasmize(wasmizer)?;
-        self.array.wasmize(wasmizer)?;
+        self.iter_over.wasmize(wasmizer)?;
         wasmizer.write_reduce(&acc_type, &x_type, use_array_iter)?;
         return Ok(0);
     }
@@ -233,22 +233,22 @@ impl Expression for Reduce {
 #[derive(Debug)]
 pub struct Filter {
     pub function: Box<dyn Expression>,
-    pub array: Box<dyn Expression>,
+    pub iter_over: Box<dyn Expression>,
     pub parent: Option<*const dyn Expression>,
 }
 
 impl Filter {
-    pub fn new(function: Box<dyn Expression>, array: Box<dyn Expression>) -> Self {
+    pub fn new(function: Box<dyn Expression>, iter_over: Box<dyn Expression>) -> Self {
         Self {
             function,
-            array,
+            iter_over,
             parent: None,
         }
     }
-}
 
-impl Expression for Filter {
-    fn get_type(&self) -> Result<Type, String> {
+    // Gets the type of contained in the result iterator, as well as if the input iterator is an array
+    // returns (result_type, is_array)
+    fn get_type_info(&self) -> Result<(Type, bool), String> {
         let (func_arg_type, func_ret_type) = match self.function.get_type()? {
             Type::Func(arg, ret) => (arg, *ret),
             x => return Err(format!("Filter function must be a function; got a {:?}", x)),
@@ -266,36 +266,45 @@ impl Expression for Filter {
                 func_ret_type
             ));
         }
-        let array_type = match self.array.get_type()? {
+        let iter_over_type = self.iter_over.get_type()?;
+        let is_array = matches!(iter_over_type, Type::Arr(_));
+        let inner_type = match iter_over_type {
             Type::Arr(x) | Type::Iter(x) => *x,
             x => {
                 return Err(format!(
-                    "Second filter argumetn must be an array or iterator; got a {:?}",
+                    "Second filter argument must be an array or iterator; got a {:?}",
                     x
                 ))
             }
         };
-        if array_type != func_arg_type {
+        if inner_type != func_arg_type {
             return Err(format!(
                 "Filter function argument and array must have the same type; got {:?} and {:?}",
-                func_arg_type, array_type
+                func_arg_type, inner_type
             ));
         }
-        Ok(Type::Iter(Box::new(array_type.clone())))
+        Ok((inner_type, is_array))
+    }
+}
+
+impl Expression for Filter {
+    fn get_type(&self) -> Result<Type, String> {
+        let (inner_type, _) = self.get_type_info()?;
+        Ok(Type::Iter(Box::new(inner_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
         self.parent = parent;
         let self_ptr = self as *const dyn Expression;
         self.function.set_parent(Some(self_ptr))?;
-        self.array.set_parent(Some(self_ptr))?;
+        self.iter_over.set_parent(Some(self_ptr))?;
 
         // name to do same special handling for function that we do for callee in Call expression
-        let arrtype = match self.array.get_type()? {
+        let arrtype = match self.iter_over.get_type()? {
             Type::Arr(t) | Type::Iter(t) => *t,
             _ => {
                 return Err(format!(
                     "Cannot use '->' with type {:?} on right",
-                    self.array.get_type()?
+                    self.iter_over.get_type()?
                 ))
             }
         };
@@ -309,10 +318,19 @@ impl Expression for Filter {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        let _ = self.get_type()?; // check that types are all in order
         self.function.compile(compiler)?;
-        self.array.compile(compiler)?;
+        self.iter_over.compile(compiler)?;
         compiler.write_opcode(OpCode::Filter);
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let (typ, use_array_iter) = self.get_type_info()?;
+        self.function.wasmize(wasmizer)?;
+        self.iter_over.wasmize(wasmizer)?;
+        wasmizer.write_filter(&typ, use_array_iter)?;
+        return Ok(0);
     }
 }
 

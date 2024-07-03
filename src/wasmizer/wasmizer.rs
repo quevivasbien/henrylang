@@ -611,6 +611,22 @@ impl Wasmizer {
         Ok(())
     }
 
+    pub fn write_filter(&mut self, typ: &ast::Type, use_array_iter: bool) -> Result<(), String> {
+        if use_array_iter {
+            // convert the Array into an ArrayIter first
+            let factory = unsigned_leb128(self.get_array_iter_factory(typ)?);
+            self.write_opcode(Opcode::Call);
+            self.write_slice(&factory);
+        }
+
+        let numtype = Numtype::from_ast_type(typ)?;
+        let factory = unsigned_leb128(self.get_filter_iter_factory(numtype)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&factory);
+
+        Ok(())
+    }
+
     fn add_local(&mut self, name: &str, numtype: Numtype) -> Vec<u8> {
         let i = self.locals_mut().add_local(name.to_string(), numtype as u8)
             + self.current_func().n_params();
@@ -806,7 +822,7 @@ impl Wasmizer {
         Ok(())
     }
     pub fn get_variable(&mut self, name: String) -> Result<i32, String> {
-        // can't yet deal with upvalues
+        // TODO: can't yet deal with upvalues or recursive functions
         // first look in local variables
         let idx = self.current_func().get_local_idx(&name);
         if let Some(idx) = idx {
@@ -860,6 +876,7 @@ impl Wasmizer {
         self.write_opcode(Opcode::I32Const);
         self.write_byte(numtype.size() as u8);
         self.write_opcode(Opcode::I32Mul);
+        // TODO: Prevent out-of-bounds access
         match numtype {
             Numtype::I32 => self.call_builtin("get_i32_field"),
             Numtype::I64 => self.call_builtin("get_i64_field"),
@@ -888,12 +905,13 @@ impl Wasmizer {
     // take a struct definition and creates a constructor for that struct
     // adds struct to Wasmizer's list of struct definitions
     // optionally adds struct constructor idx to stack
+    // returns the index of the struct's constructor function
     pub fn create_struct(
         &mut self,
         struct_name: String,
         struct_def: Struct,
         write_constructor: bool,
-    ) -> Result<(), String> {
+    ) -> Result<u32, String> {
         let mut fieldnames = Vec::with_capacity(struct_def.fields.len());
         let mut fieldtypes = Vec::with_capacity(struct_def.fields.len());
         for (name, field) in struct_def.fields.iter() {
@@ -969,7 +987,7 @@ impl Wasmizer {
             // add constructor to stack
             self.write_last_func_index();
         }
-        Ok(())
+        Ok(idx)
     }
 
     // get the field of a struct
@@ -1015,15 +1033,11 @@ impl Wasmizer {
             ("stop".to_string(), Numtype::I32),
         ]);
 
-        self.create_struct("<RangeIter>".to_string(), struct_def, false)?;
-        let constructor_idx = *self.builtins.get("<RangeIter>").unwrap();
+        let constructor_idx = self.create_struct("<RangeIter>".to_string(), struct_def, false)?;
 
         // initialize the "advance" function used by this Iter type
         // function will take the offset of the start of a range struct, update the "current" field, and return a bool (1 if the iterator is done)
-        let mut func = BuiltinFunc::new(
-            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
-            vec!["offset".to_string()],
-        );
+        let mut func = BuiltinFunc::advance_fn_template();
         func.add_local("current", Numtype::I32);
         func.add_local("step", Numtype::I32);
         // add "step" to "current"
@@ -1163,47 +1177,30 @@ impl Wasmizer {
         ]);
 
         // let advance_delta = unsigned_leb128(struct_def.get_field("advance_fn").unwrap().offset);  // not needed
-        let map_fn_delta = unsigned_leb128(struct_def.get_field("map_fn").unwrap().offset);
-        let inner_offset_delta =
-            unsigned_leb128(struct_def.get_field("inner_offset").unwrap().offset);
+        let map_fn_delta = struct_def.get_field("map_fn").unwrap().offset;
+        let inner_offset_delta = struct_def.get_field("inner_offset").unwrap().offset;
 
         let struct_name = format!("<MapIter[{}->{}]>", in_type, out_type);
-        self.create_struct(struct_name.clone(), struct_def, false)?;
-        let constructor_idx = *self.builtins.get(&struct_name).unwrap();
+        let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize the "advance" function used by this Iter type
         // function will take the offset of the start of a range struct, update the "current" field, and return a bool (1 if the iterator is done)
-        let mut func = BuiltinFunc::new(
-            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
-            vec!["offset".to_string()],
-        );
+        let mut func = BuiltinFunc::advance_fn_template();
         func.add_local("inner_offset", Numtype::I32); // will store the offset of the inner iterator in memory
         func.add_local("current", out_type); // will store the current value of the map iterator
 
         // call `advance` on the inner iterator
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&inner_offset_delta); // index of inner_offset within map iterator
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        func.write_opcode(Opcode::LocalTee);
-        func.write_var("inner_offset");
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("inner_offset"); // put this on stack again, since we'll also need to pass it to advance fn
-        let inner_advance_fn_delta = unsigned_leb128(in_type.size());
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&inner_advance_fn_delta); // index of advance_fn within inner iterator
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        let advance_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
-            &FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
         ));
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&advance_fn_signature);
-        func.write_byte(0x00); // table index
+        func.call_advance_on_inner(
+            "offset",
+            "inner_offset",
+            inner_offset_delta,
+            in_type,
+            advance_fn_type_idx,
+        );
 
         // if done, we can just return that here
         func.write_opcode(Opcode::If);
@@ -1228,7 +1225,7 @@ impl Wasmizer {
         func.write_opcode(Opcode::LocalGet);
         func.write_var("offset");
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&map_fn_delta); // index of map_fn within map iterator
+        func.write_slice(&unsigned_leb128(map_fn_delta)); // index of map_fn within map iterator
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
@@ -1327,46 +1324,29 @@ impl Wasmizer {
             ("inner_offset".to_string(), Numtype::I32), // the memory offset of the iterator being reduced
         ]);
 
-        let reduce_fn_delta = unsigned_leb128(struct_def.get_field("reduce_fn").unwrap().offset);
-        let inner_offset_delta =
-            unsigned_leb128(struct_def.get_field("inner_offset").unwrap().offset);
+        let reduce_fn_delta = struct_def.get_field("reduce_fn").unwrap().offset;
+        let inner_offset_delta = struct_def.get_field("inner_offset").unwrap().offset;
 
         let struct_name = format!("<ScanIter[{},{}]>", acc_type, x_type);
-        self.create_struct(struct_name.clone(), struct_def, false)?;
-        let constructor_idx = *self.builtins.get(&struct_name).unwrap();
+        let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize advance fn
-        let mut func = BuiltinFunc::new(
-            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
-            vec!["offset".to_string()],
-        );
+        let mut func = BuiltinFunc::advance_fn_template();
         func.add_local("inner_offset", Numtype::I32);
         func.add_local("current", acc_type);
 
         // start by calling `advance` on the inner iterator
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&inner_offset_delta);
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        func.write_opcode(Opcode::LocalTee);
-        func.write_var("inner_offset");
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("inner_offset");
-        let inner_advance_fn_delta = unsigned_leb128(x_type.size());
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&inner_advance_fn_delta);
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        let advance_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
-            &FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
         ));
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&advance_fn_signature);
-        func.write_byte(0x00); // table index
+        func.call_advance_on_inner(
+            "offset",
+            "inner_offset",
+            inner_offset_delta,
+            x_type,
+            advance_fn_type_idx,
+        );
 
         // if done, return 1 here
         func.write_opcode(Opcode::If);
@@ -1397,7 +1377,7 @@ impl Wasmizer {
         func.write_opcode(Opcode::LocalGet);
         func.write_var("offset");
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&reduce_fn_delta);
+        func.write_slice(&unsigned_leb128(reduce_fn_delta));
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
@@ -1478,6 +1458,156 @@ impl Wasmizer {
         Ok(factory_idx)
     }
 
+    fn get_filter_iter_factory(&mut self, inner_type: Numtype) -> Result<u32, String> {
+        let factory_name = format!("<FilterIter[{}]Factory>", inner_type);
+        if let Some(idx) = self.builtins.get(&factory_name) {
+            return Ok(*idx);
+        }
+
+        let struct_def = Struct::new(vec![
+            ("current".to_string(), inner_type),
+            ("advance_fn".to_string(), Numtype::I32),
+            ("filter_fn".to_string(), Numtype::I32), // the table index of the filter function
+            ("inner_offset".to_string(), Numtype::I32), // the memory offset of the iterator being filtered
+        ]);
+
+        let filter_fn_delta = struct_def.get_field("filter_fn").unwrap().offset;
+        let inner_offset_delta = struct_def.get_field("inner_offset").unwrap().offset;
+
+        let struct_name = format!("<FilterIter[{}]>", inner_type);
+        let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
+
+        // initialize advance fn
+        let mut func = BuiltinFunc::advance_fn_template();
+        func.add_local("inner_offset", Numtype::I32);
+        func.add_local("current", inner_type);
+        func.add_local("inner_current", inner_type);
+
+        // This will all be in a loop, since we want to keep going until we run out of values or get a value that passes the filter
+        func.write_opcode(Opcode::Loop);
+        func.write_byte(Numtype::I32 as u8);
+
+        // call advance on the inner iterator
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
+        ));
+        func.call_advance_on_inner(
+            "offset",
+            "inner_offset",
+            inner_offset_delta,
+            inner_type,
+            advance_fn_type_idx,
+        );
+
+        // if done, return 1 here
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::I32 as u8);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x01);
+
+        // otherwise, get the inner current value, and call the filter function on it; repeat until getting a value that isn't filtered out
+        func.write_opcode(Opcode::Else);
+
+        // get inner current
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("inner_offset");
+        func.write_opcode(inner_type.load_op());
+        func.write_slice(&[0x02, 0x00]);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("inner_current");
+
+        // pass to filter fn
+        // get filter fn
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(filter_fn_delta));
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        // call
+        let filter_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
+            &FuncTypeSignature::new(vec![inner_type], Some(Numtype::I32)),
+        ));
+        func.write_opcode(Opcode::CallIndirect);
+        func.write_slice(&filter_fn_signature);
+        func.write_byte(0x00); // table index
+
+        // if result is false (0), branch to start of loop
+        func.write_opcode(Opcode::I32Eqz);
+        func.write_opcode(Opcode::BrIf);
+        func.write_byte(0x01); // break depth is 1 since we need to get out of the if statement
+
+        // otherwise, this value is not filtered out, so set it as the new current value
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("inner_current");
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("current");
+
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(inner_type.store_op());
+        func.write_slice(&[0x02, 0x00]);
+
+        // return 0 (not done)
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x00);
+
+        func.write_opcode(Opcode::End); // end if
+
+        func.write_opcode(Opcode::End); // end loop
+
+        func.write_opcode(Opcode::End); // end function
+
+        let advance_fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(
+            format!("<FilterIter[{}]Advance>", inner_type),
+            advance_fn_idx,
+        );
+
+        // create factory function (for creating from function, iter_over syntax)
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I32, Numtype::I64], Some(Numtype::I64)),
+            vec!["filter_fn".to_string(), "iter_over".to_string()],
+        );
+        // initial value of current is arbitrary, just set to 0
+        func.write_opcode(inner_type.const_op());
+        match inner_type {
+            Numtype::F32 => func.write_slice(&[0x00, 0x00, 0x00, 0x00]),
+            _ => func.write_byte(0x00),
+        };
+        // advance_fn
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(
+            // need to subtract number of imports, since this will be called indirectly, and imports are not included in the function table
+            advance_fn_idx - self.builder.imports.len() as u32,
+        ));
+        // filter_fn
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("filter_fn");
+        // inner_offset = iter_over >> 32
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_over");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&unsigned_leb128(constructor_idx));
+
+        func.write_opcode(Opcode::End);
+
+        let factory_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(factory_name, factory_idx);
+
+        Ok(factory_idx)
+    }
+
     fn get_array_iter_factory(&mut self, array_inner_type: &ast::Type) -> Result<u32, String> {
         let numtype = Numtype::from_ast_type(array_inner_type)?;
 
@@ -1501,14 +1631,10 @@ impl Wasmizer {
             unsigned_leb128(struct_def.get_field("max_inner_offset").unwrap().offset);
 
         let struct_name = format!("ArrIter[{}]", numtype);
-        self.create_struct(struct_name.clone(), struct_def, false)?;
-        let constructor_idx = *self.builtins.get(&struct_name).unwrap();
+        let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize "advance" function
-        let mut func = BuiltinFunc::new(
-            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
-            vec!["offset".to_string()],
-        );
+        let mut func = BuiltinFunc::advance_fn_template();
         func.add_local("current", numtype);
         func.add_local("inner_offset", Numtype::I32);
 

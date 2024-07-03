@@ -160,6 +160,48 @@ impl BuiltinFunc {
         self.write_opcode(Opcode::GlobalSet);
         self.write_byte(0x00);
     }
+
+    // Create a new function that will be used to advance an iterator
+    pub fn advance_fn_template() -> Self {
+        BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+            vec!["offset".to_string()],
+        )
+    }
+
+    // Used to call the advance function on an iterator within an iterator
+    // Also sets the value of the inner_offset variable
+    // Meant to be used as part of the `advance` function for the [outer] iterator
+    pub fn call_advance_on_inner(
+        &mut self,
+        offset_name: &str,
+        inner_offset_name: &str,
+        inner_offset_delta: u32,
+        inner_type: Numtype,
+        advance_fn_type_idx: u32,
+    ) {
+        self.write_opcode(Opcode::LocalGet);
+        self.write_var(offset_name);
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&unsigned_leb128(inner_offset_delta)); // index of inner_offset within map iterator
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Load);
+        self.write_slice(&[0x02, 0x00]);
+        self.write_opcode(Opcode::LocalTee);
+        self.write_var(inner_offset_name);
+        self.write_opcode(Opcode::LocalGet);
+        self.write_var(inner_offset_name); // put this on stack again, since we'll also need to pass it to advance fn
+        let inner_advance_fn_delta = unsigned_leb128(inner_type.size());
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&inner_advance_fn_delta); // index of advance_fn within inner iterator
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Load);
+        self.write_slice(&[0x02, 0x00]);
+        let advance_fn_signature = unsigned_leb128(advance_fn_type_idx);
+        self.write_opcode(Opcode::CallIndirect);
+        self.write_slice(&advance_fn_signature);
+        self.write_byte(0x00); // table index
+    }
 }
 
 lazy_static! {

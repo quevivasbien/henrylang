@@ -78,6 +78,10 @@ fn test_objects() {
         "<anontype> { a: henry, b: [1, 2] }"
     );
     assert_eq!(run("MyType := type { a: Int b: Str } x := MyType(1, \"henry\") x.a = 1 and x.b = \"henry\""), "true");
+    assert_eq!(
+        run("MyType := type { a: Int } get_a := |x: MyType|{x.a} x := MyType(152) get_a(x)"),
+        "152"
+    );
 }
 
 #[test]
@@ -134,4 +138,24 @@ fn test_reduce() {
         "> Henry is cool"
     );
     assert_eq!(run("reduce(|acc:Str, x:Arr(Str)|{ acc + reduce(|acc:Str, x:Str|{acc + x}, x, \"\") }, [[\"Hi\", \"There\"], [\"How\", \"Are\", \"You\"]], \"\")"), "HiThereHowAreYou");
+}
+
+#[test]
+fn test_filter() {
+    assert_eq!(
+        run("@filter(|x: Int| { x > 0 }, -3 to 3)"),
+        "[1, 2, 3]"
+    );
+    assert_eq!(
+        run("@filter(|x: Str| { x = \"Henry\" }, [\"Henry\", \"Lenry\", \"Henry\"])"),
+        "[Henry, Henry]"
+    );
+    assert_eq!(
+        run("@filter(|x: Int| { x > 0 }, 0 to -3)"),
+        "[]"
+    );
+    assert_eq!(
+        run("first_is_positive := |x: Arr(Int)| { x(0) > 0 } @filter(first_is_positive, [[-1, 1, 2], [1, 2, 3]])"),
+        "[[1, 2, 3]]"
+    );
 }
