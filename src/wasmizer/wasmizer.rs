@@ -349,11 +349,10 @@ impl Wasmizer {
 
     pub fn write_collect(&mut self, typ: &ast::Type) -> Result<(), String> {
         let numtype = Numtype::from_ast_type(typ)?;
-        let fn_name = format!("collect_{}", numtype);
-        if self.builtins.get(&fn_name).is_none() {
-            self.init_collect(numtype)?;
-        }
-        self.call_builtin(&fn_name).unwrap();
+
+        let collect_fn_idx = unsigned_leb128(self.init_collect(numtype)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&collect_fn_idx);
 
         Ok(())
     }
@@ -580,6 +579,34 @@ impl Wasmizer {
         let factory = unsigned_leb128(self.get_map_iter_factory(left_type)?);
         self.write_opcode(Opcode::Call);
         self.write_slice(&factory);
+
+        Ok(())
+    }
+
+    pub fn write_reduce(
+        &mut self,
+        acc_type: &ast::Type,
+        x_type: &ast::Type,
+        use_array_iter: bool,
+    ) -> Result<(), String> {
+        if use_array_iter {
+            // convert the Array into an ArrayIter first
+            let factory = unsigned_leb128(self.get_array_iter_factory(x_type)?);
+            self.write_opcode(Opcode::Call);
+            self.write_slice(&factory);
+        }
+
+        let acc_type = Numtype::from_ast_type(acc_type)?;
+        let x_type = Numtype::from_ast_type(x_type)?;
+
+        // we implement this by creating a scan iterator, then getting the last element of that iterator
+        let factory = unsigned_leb128(self.get_scan_iter_factory(acc_type, x_type)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&factory);
+
+        let last_fn_idx = unsigned_leb128(self.init_last(acc_type)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&last_fn_idx);
 
         Ok(())
     }
@@ -1137,7 +1164,8 @@ impl Wasmizer {
 
         // let advance_delta = unsigned_leb128(struct_def.get_field("advance_fn").unwrap().offset);  // not needed
         let map_fn_delta = unsigned_leb128(struct_def.get_field("map_fn").unwrap().offset);
-        let inner_offset_delta = unsigned_leb128(struct_def.get_field("inner_offset").unwrap().offset);
+        let inner_offset_delta =
+            unsigned_leb128(struct_def.get_field("inner_offset").unwrap().offset);
 
         let struct_name = format!("<MapIter[{}->{}]>", in_type, out_type);
         self.create_struct(struct_name.clone(), struct_def, false)?;
@@ -1150,14 +1178,13 @@ impl Wasmizer {
             vec!["offset".to_string()],
         );
         func.add_local("inner_offset", Numtype::I32); // will store the offset of the inner iterator in memory
-        func.add_local("done", Numtype::I32);
         func.add_local("current", out_type); // will store the current value of the map iterator
 
         // call `advance` on the inner iterator
         func.write_opcode(Opcode::LocalGet);
         func.write_var("offset");
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&inner_offset_delta);  // index of inner_offset within map iterator
+        func.write_slice(&inner_offset_delta); // index of inner_offset within map iterator
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
@@ -1165,9 +1192,7 @@ impl Wasmizer {
         func.write_var("inner_offset");
         func.write_opcode(Opcode::LocalGet);
         func.write_var("inner_offset"); // put this on stack again, since we'll also need to pass it to advance fn
-        let inner_advance_fn_delta = unsigned_leb128(
-            in_type.size()
-        );
+        let inner_advance_fn_delta = unsigned_leb128(in_type.size());
         func.write_opcode(Opcode::I32Const);
         func.write_slice(&inner_advance_fn_delta); // index of advance_fn within inner iterator
         func.write_opcode(Opcode::I32Add);
@@ -1278,6 +1303,170 @@ impl Wasmizer {
         func.write_byte(0x20);
         func.write_opcode(Opcode::I64ShrU);
         func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&unsigned_leb128(constructor_idx));
+
+        func.write_opcode(Opcode::End);
+
+        let factory_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(factory_name, factory_idx);
+
+        Ok(factory_idx)
+    }
+
+    fn get_scan_iter_factory(&mut self, acc_type: Numtype, x_type: Numtype) -> Result<u32, String> {
+        let factory_name = format!("<ScanIter[{},{}]Factory>", acc_type, x_type);
+        if let Some(idx) = self.builtins.get(&factory_name) {
+            return Ok(*idx);
+        }
+
+        let struct_def = Struct::new(vec![
+            ("current".to_string(), acc_type),
+            ("advance_fn".to_string(), Numtype::I32),
+            ("reduce_fn".to_string(), Numtype::I32), // the table index of the reduce function
+            ("inner_offset".to_string(), Numtype::I32), // the memory offset of the iterator being reduced
+        ]);
+
+        let reduce_fn_delta = unsigned_leb128(struct_def.get_field("reduce_fn").unwrap().offset);
+        let inner_offset_delta =
+            unsigned_leb128(struct_def.get_field("inner_offset").unwrap().offset);
+
+        let struct_name = format!("<ScanIter[{},{}]>", acc_type, x_type);
+        self.create_struct(struct_name.clone(), struct_def, false)?;
+        let constructor_idx = *self.builtins.get(&struct_name).unwrap();
+
+        // initialize advance fn
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+            vec!["offset".to_string()],
+        );
+        func.add_local("inner_offset", Numtype::I32);
+        func.add_local("current", acc_type);
+
+        // start by calling `advance` on the inner iterator
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&inner_offset_delta);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("inner_offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("inner_offset");
+        let inner_advance_fn_delta = unsigned_leb128(x_type.size());
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&inner_advance_fn_delta);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        let advance_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
+            &FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+        ));
+        func.write_opcode(Opcode::CallIndirect);
+        func.write_slice(&advance_fn_signature);
+        func.write_byte(0x00); // table index
+
+        // if done, return 1 here
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::I32 as u8);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x01);
+
+        // otherwise, get current value from inner iterator and use to update accumulator
+        func.write_opcode(Opcode::Else);
+
+        // get values of acc (current) and x (inner current) variables
+        let acc_load_op = acc_type.load_op();
+        let x_load_op = x_type.load_op();
+        // get acc (current)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(acc_load_op);
+        func.write_slice(&[0x02, 0x00]);
+        // get x (inner current)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("inner_offset");
+        func.write_opcode(x_load_op);
+        func.write_slice(&[0x02, 0x00]);
+
+        // pass acc and x to reduce_fn
+        // get reduce_fn
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&reduce_fn_delta);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+        // call
+        let reduce_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
+            &FuncTypeSignature::new(vec![acc_type, x_type], Some(acc_type)),
+        ));
+        func.write_opcode(Opcode::CallIndirect);
+        func.write_slice(&reduce_fn_signature);
+        func.write_byte(0x00); // table index
+
+        // set as new acc (current) value
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("current");
+
+        let store_op = acc_type.store_op();
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(store_op);
+        func.write_slice(&[0x02, 0x00]);
+
+        // return 0
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0x00);
+
+        func.write_opcode(Opcode::End); // end if
+
+        func.write_opcode(Opcode::End); // end function
+
+        let advance_fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(
+            format!("<ScanIter[{},{}]Advance>", acc_type, x_type),
+            advance_fn_idx,
+        );
+
+        // create factory function (for creating from function, init, iter_over syntax)
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(
+                vec![Numtype::I32, acc_type, Numtype::I64],
+                Some(Numtype::I64),
+            ),
+            vec![
+                "reduce_fn".to_string(),
+                "init".to_string(),
+                "iter_over".to_string(),
+            ],
+        );
+        // current = init
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("init");
+        // advance_fn
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(
+            // need to subtract number of imports, since this will be called indirectly, and imports are not included in the function table
+            advance_fn_idx - self.builder.imports.len() as u32,
+        ));
+        // reduce_fn
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("reduce_fn");
+        // inner_offset = iter_over >> 32
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_over");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+
         func.write_opcode(Opcode::Call);
         func.write_slice(&unsigned_leb128(constructor_idx));
 
@@ -1439,8 +1628,14 @@ impl Wasmizer {
         Ok(factory_idx)
     }
 
-    // create the `collect_i32` builtin (used for the @ operator on Iter(Int) or Iter(Func(..)) types)
-    fn init_collect(&mut self, numtype: Numtype) -> Result<(), String> {
+    // create the `collect_[type]` builtin (used for the @ operator on Iter([type]))
+    fn init_collect(&mut self, numtype: Numtype) -> Result<u32, String> {
+        // check if already initialized, return index if so
+        let fn_name = format!("collect_{}", numtype);
+        if let Some(idx) = self.builtins.get(&fn_name) {
+            return Ok(*idx);
+        }
+
         let mut func = BuiltinFunc::new(
             // takes an Iter and returns an Arr
             FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I64)),
@@ -1478,7 +1673,6 @@ impl Wasmizer {
         func.write_slice(&alloc_idx);
         func.write_opcode(Opcode::LocalTee);
         func.write_var("array_offset");
-        func.write_opcode(Opcode::Call); func.write_byte(0);
         func.write_opcode(Opcode::LocalSet);
         func.write_var("element_offset");
 
@@ -1495,13 +1689,13 @@ impl Wasmizer {
         // call iterator->advance
         func.write_opcode(Opcode::LocalGet);
         func.write_var("iter_offset");
-        func.write_opcode(Opcode::LocalGet);  // iter offset
+        func.write_opcode(Opcode::LocalGet); // iter offset
         func.write_var("iter_offset");
         func.write_opcode(Opcode::I32Const);
         func.write_slice(&unsigned_leb128(memsize));
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);  // advance fn
+        func.write_slice(&[0x02, 0x00]); // advance fn
         let functype_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
             vec![Numtype::I32],
             Some(Numtype::I32),
@@ -1538,16 +1732,13 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // add memsize to element_offset
-        func.write_opcode(Opcode::I32Const); func.write_byte(69); func.write_opcode(Opcode::Call); func.write_byte(0); func.write_opcode(Opcode::Drop);
         func.write_opcode(Opcode::LocalGet);
         func.write_var("element_offset");
-        func.write_opcode(Opcode::Call); func.write_byte(0);
         func.write_opcode(Opcode::I32Const);
         func.write_slice(&unsigned_leb128(memsize));
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::LocalTee);
         func.write_var("element_offset");
-        func.write_opcode(Opcode::Call); func.write_byte(0);
 
         // if element_offset >= array_offset + alloc_size, allocate more space
         func.write_opcode(Opcode::LocalGet);
@@ -1584,7 +1775,7 @@ impl Wasmizer {
         func.write_var("array_offset");
         func.write_opcode(Opcode::I32Sub);
         func.write_slice(&MEMCOPY);
-        
+
         // set element_offset to new_array_offset + (element_offset - array_offset)
         func.write_opcode(Opcode::LocalGet);
         func.write_var("new_array_offset");
@@ -1628,9 +1819,82 @@ impl Wasmizer {
         func.write_opcode(Opcode::End); // end function
 
         let fn_idx = self.builder.add_builtin(&func)?;
-        self.builtins.insert(format!("collect_{}", numtype), fn_idx);
+        self.builtins.insert(fn_name, fn_idx);
 
-        Ok(())
+        Ok(fn_idx)
+    }
+
+    // initialize the last_[type] builtin, used to get the last element in an iterator
+    fn init_last(&mut self, iter_type: Numtype) -> Result<u32, String> {
+        // check if already initialized, return index if so
+        let fn_name = format!("last_{}", iter_type);
+        if let Some(idx) = self.builtins.get(&fn_name) {
+            return Ok(*idx);
+        }
+
+        let mut func = BuiltinFunc::new(
+            // takes an Iter([type]) and returns a value of type [type]
+            FuncTypeSignature::new(vec![Numtype::I64], Some(iter_type)),
+            vec!["iter_fatptr".to_string()],
+        );
+        func.add_local("iter_offset", Numtype::I32);
+
+        // iter_offset = iter_fatptr >> 32
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_fatptr");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("iter_offset");
+
+        // loop:
+        // if iterator->advance() == 1:
+        //   return iterator->current
+        // else:
+        //   goto loop
+
+        func.write_opcode(Opcode::Loop);
+        func.write_byte(iter_type as u8);
+
+        // call iterator->advance
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_offset");
+        func.write_opcode(Opcode::LocalGet); // iter offset
+        func.write_var("iter_offset");
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(iter_type.size()));
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]); // advance fn
+        let functype_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
+        ));
+        func.write_opcode(Opcode::CallIndirect);
+        func.write_slice(&unsigned_leb128(functype_idx)); // signature index
+        func.write_byte(0x00); // table index
+
+        // branch (continue to next loop iteration) if advance() == 0
+        func.write_opcode(Opcode::I32Eqz);
+        func.write_opcode(Opcode::BrIf);
+        func.write_byte(0x00);
+
+        // otherwise, get iterator->current (which will be returned)
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_offset");
+        func.write_opcode(iter_type.load_op());
+        func.write_slice(&[0x02, 0x00]);
+
+        func.write_opcode(Opcode::End); // end loop
+
+        func.write_opcode(Opcode::End); // end function
+
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(fn_name, fn_idx);
+
+        Ok(fn_idx)
     }
 
     fn to_bytes(&self) -> Vec<u8> {

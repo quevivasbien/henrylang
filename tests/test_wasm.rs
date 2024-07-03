@@ -2,12 +2,10 @@ use henrylang::*;
 
 fn run(source: &str) -> String {
     match wasmize(source, Env::default()) {
-        Ok((bytes, typ)) => {
-            match run_wasm(&bytes, typ) {
-                Ok(x) => x,
-                Err(e) => panic!("Runtime Error: {}", e),
-            }
-        }
+        Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+            Ok(x) => x,
+            Err(e) => panic!("Runtime Error: {}", e),
+        },
         Err(e) => panic!("Compile Error: {}", e),
     }
 }
@@ -55,15 +53,30 @@ fn test_functions() {
     assert_eq!(run("f := |x: Int| { x + 1 } f(1)"), "2");
     assert_eq!(run("f := |x: Float| { x + 1.0 } f(1.0)"), "2.0");
     assert_eq!(run("f := |x: Int, y: Int| { x + y } f(1, 2)"), "3");
-    assert_eq!(run("f := |x: Arr(Int), i: Int| { x(i) } f([1, 2, 3], 1)"), "2");
-    assert_eq!(run("f := |x: Str, y: Str| { x + y } f(\"hello\", \"world\")"), "helloworld");
-    assert_eq!(run("f := ||{[\"henry\",\"lenry\"]} x:=f() [121,122,188,100] x"), "[henry, lenry]");
+    assert_eq!(
+        run("f := |x: Arr(Int), i: Int| { x(i) } f([1, 2, 3], 1)"),
+        "2"
+    );
+    assert_eq!(
+        run("f := |x: Str, y: Str| { x + y } f(\"hello\", \"world\")"),
+        "helloworld"
+    );
+    assert_eq!(
+        run("f := ||{[\"henry\",\"lenry\"]} x:=f() [121,122,188,100] x"),
+        "[henry, lenry]"
+    );
 }
 
 #[test]
 fn test_objects() {
-    assert_eq!(run("MyType := type { c: Bool, a:Int b: Float } MyType(true, 152, 16.2)"), "MyType { c: true, a: 152, b: 16.2 }");
-    assert_eq!(run("(type { a: Str, b: Arr(Int) })(\"henry\", [1,2])"), "<anontype> { a: henry, b: [1, 2] }");
+    assert_eq!(
+        run("MyType := type { c: Bool, a:Int b: Float } MyType(true, 152, 16.2)"),
+        "MyType { c: true, a: 152, b: 16.2 }"
+    );
+    assert_eq!(
+        run("(type { a: Str, b: Arr(Int) })(\"henry\", [1,2])"),
+        "<anontype> { a: henry, b: [1, 2] }"
+    );
     assert_eq!(run("MyType := type { a: Int b: Str } x := MyType(1, \"henry\") x.a = 1 and x.b = \"henry\""), "true");
 }
 
@@ -76,10 +89,49 @@ fn test_ranges() {
 #[test]
 fn test_map() {
     assert_eq!(run("@(|x: Int| {x + 1} -> 0 to 3)"), "[1, 2, 3, 4]");
-    assert_eq!(run("f := |x: Int| {x + 1} iter := f -> f -> 0 to 3 @iter"), "[2, 3, 4, 5]");
-    assert_eq!(run("f := |x: Int| {x + 1} iter := f -> [0, 1, 2, 3] @iter"), "[1, 2, 3, 4]");
-    assert_eq!(run("f := |x: Int| { 1.0 } iter := f -> 0 to 3 @iter"), "[1.0, 1.0, 1.0, 1.0]");
-    assert_eq!(run("f := |x: Float| { x + 1.0 } iter := f -> [0.0, 1.0] @iter"), "[1.0, 2.0]");
-    assert_eq!(run("f := |x: Str| { x + \"!\" } iter := f -> [\"hello\", \"world\"] @iter"), "[hello!, world!]");
-    assert_eq!(run("@(|x: Int| { @(0 to x) } -> 0 to 3)"), "[[0], [0, 1], [0, 1, 2], [0, 1, 2, 3]]");
+    assert_eq!(
+        run("f := |x: Int| {x + 1} iter := f -> f -> 0 to 3 @iter"),
+        "[2, 3, 4, 5]"
+    );
+    assert_eq!(
+        run("f := |x: Int| {x + 1} iter := f -> [0, 1, 2, 3] @iter"),
+        "[1, 2, 3, 4]"
+    );
+    assert_eq!(
+        run("f := |x: Int| { 1.0 } iter := f -> 0 to 3 @iter"),
+        "[1.0, 1.0, 1.0, 1.0]"
+    );
+    assert_eq!(
+        run("f := |x: Float| { x + 1.0 } iter := f -> [0.0, 1.0] @iter"),
+        "[1.0, 2.0]"
+    );
+    assert_eq!(
+        run("f := |x: Str| { x + \"!\" } iter := f -> [\"hello\", \"world\"] @iter"),
+        "[hello!, world!]"
+    );
+    assert_eq!(
+        run("@(|x: Int| { @(0 to x) } -> 0 to 3)"),
+        "[[0], [0, 1], [0, 1, 2], [0, 1, 2, 3]]"
+    );
+}
+
+#[test]
+fn test_reduce() {
+    assert_eq!(
+        run("reduce(|acc: Int, x: Int| { acc + x }, 0 to 100, 0)"),
+        "5050"
+    );
+    assert_eq!(
+        run("reduce(|acc: Int, x: Int| { acc + x }, 0 to 100, -5050)"),
+        "0"
+    );
+    assert_eq!(
+        run("reduce(|acc: Float, x: Float| { acc + x }, [1.0, 2.0, 3.0], 0.0)"),
+        "6.0"
+    );
+    assert_eq!(
+        run("reduce(|acc:Str, x:Str|{acc + \" \" + x}, [\"Henry\", \"is\", \"cool\"], \">\")"),
+        "> Henry is cool"
+    );
+    assert_eq!(run("reduce(|acc:Str, x:Arr(Str)|{ acc + reduce(|acc:Str, x:Str|{acc + x}, x, \"\") }, [[\"Hi\", \"There\"], [\"How\", \"Are\", \"You\"]], \"\")"), "HiThereHowAreYou");
 }
