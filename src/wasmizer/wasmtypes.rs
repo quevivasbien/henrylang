@@ -37,7 +37,8 @@ impl Numtype {
             ast::Type::Str => Ok(Self::I64),
             ast::Type::Iter(_) => Ok(Self::I64),
             ast::Type::Object(..) => Ok(Self::I64),
-            _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
+            ast::Type::Maybe(_) => Ok(Self::I64),
+            // _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }
     }
 

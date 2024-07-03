@@ -542,6 +542,125 @@ impl Wasmizer {
         Ok(())
     }
 
+    pub fn write_some(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
+        let constructor_idx = self.init_maybe(numtype)?;
+
+        // Constructor requires 2 arguments: value and is_some. Value is already on stack.
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(1);  // yes, this is some
+
+        // Call the constructor
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&unsigned_leb128(constructor_idx));
+
+        Ok(())
+    }
+
+    pub fn write_null(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
+        let constructor_idx = self.init_maybe(numtype)?;
+
+        // Constructor requies 2 arguments: value and is_some. We can just pass 0 for the value.
+        self.write_opcode(numtype.const_op());
+        match numtype {
+            Numtype::F32 => self.write_slice(&[0, 0, 0, 0]),
+            _ => self.write_byte(0),
+        };
+        self.write_opcode(Opcode::I32Const);
+        self.write_byte(0);  // no, this is null
+
+        // Call the constructor
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&unsigned_leb128(constructor_idx));
+
+        Ok(())
+    }
+
+    fn init_maybe(&mut self, numtype: Numtype) -> Result<u32, String> {
+        let struct_name = format!("<Maybe[{}]>", numtype);
+
+        // check if the struct has already been defined
+        if let Some(idx) = self.builtins.get(&struct_name) {
+            return Ok(*idx);
+        }
+
+        // define the struct
+        let struct_def = Struct::new(vec![
+            ("value".to_string(), numtype),
+            ("is_some".to_string(), Numtype::I32),
+        ]);
+
+        self.create_struct(struct_name, struct_def, false)
+    }
+
+    pub fn write_unwrap(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
+        let unwrap_fn_idx = self.init_unwrap(numtype)?;
+
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&unsigned_leb128(unwrap_fn_idx));
+        
+        Ok(())
+    }
+
+    fn init_unwrap(&mut self, numtype: Numtype) -> Result<u32, String> {
+        let fn_name = format!("unwrap_{}", numtype);
+
+        // check if the function has already been defined
+        if let Some(idx) = self.builtins.get(&fn_name) {
+            return Ok(*idx);
+        }
+
+        // define the function
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I64, numtype], Some(numtype)),
+            vec!["maybe_value".to_string(), "default".to_string()],
+        );
+        func.add_local("maybe_value_offset", Numtype::I32);
+
+        // get the offset from the maybe_value fatptr
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("maybe_value");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("maybe_value_offset");
+
+        // get the is_some (second) field from the maybe_value
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&&unsigned_leb128(numtype.size()));  // offset of is_some field
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+
+        // if is_some is 1, return the value, otherwise return default
+        func.write_opcode(Opcode::If);
+        func.write_byte(numtype as u8);
+
+        // get the value
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("maybe_value_offset");
+        func.write_opcode(numtype.load_op());
+        func.write_slice(&[0x02, 0x00]);
+
+        func.write_opcode(Opcode::Else);
+
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("default");
+
+        func.write_opcode(Opcode::End);  // end if
+
+        func.write_opcode(Opcode::End);  // end function
+
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(fn_name, fn_idx);
+
+        Ok(fn_idx)
+    }
+
     pub fn write_map(
         &mut self,
         left_type: &ast::Type,

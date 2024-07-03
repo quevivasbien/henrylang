@@ -85,6 +85,26 @@ fn test_objects() {
 }
 
 #[test]
+fn test_maybe() {
+    assert_eq!(
+        run("unwrap(some(1), 0)"),
+        "1"
+    );
+    assert_eq!(
+        run("unwrap({}: Int, 0)"),
+        "0"
+    );
+    assert_eq!(
+        run("unwrap(some(\"Henry\"), \"Lenry\")"),
+        "Henry"
+    );
+    assert_eq!(
+        run("unwrap({}: Str, \"Lenry\")"),
+        "Lenry"
+    );
+}
+
+#[test]
 fn test_ranges() {
     assert_eq!(run("@(0 to 3)"), "[0, 1, 2, 3]");
     assert_eq!(run("@(0 to -3)"), "[0, -1, -2, -3]");

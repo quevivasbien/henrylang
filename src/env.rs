@@ -144,8 +144,9 @@ fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<S
     let arrtype = match typ {
         Type::Arr(t) => *t,
         Type::Str => return view_string(memview, offset, size),
-        Type::Iter(t) => return Ok(format!("<iterator of type `{:?}`>", t)),
+        Type::Iter(t) => return Ok(format!("<iterator over type `{:?}`>", t)),
         Type::Object(name, fields) => return view_object(memview, offset, size, name, fields),
+        Type::Maybe(t) => return Ok(format!("<maybe value of type `{:?}`>", t)),
         _ => return Err(format!("Unexpected type: {:?}", typ)),
     };
     let result = match arrtype {

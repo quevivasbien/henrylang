@@ -64,6 +64,19 @@ impl Expression for Maybe {
             },
         }
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        match &self.value {
+            MaybeValue::Some(e) => {
+                e.wasmize(wasmizer)?;
+                wasmizer.write_some(&e.get_type()?)?;
+            },
+            MaybeValue::Null(t) => {
+                wasmizer.write_null(&t.get_type()?)?;
+            },
+        }
+        Ok(0)
+    }
 }
 
 
@@ -114,5 +127,13 @@ impl Expression for Unwrap {
             compiler.write_opcode(OpCode::Unwrap);
         }
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        self.value.wasmize(wasmizer)?;
+        self.default.wasmize(wasmizer)?;
+        wasmizer.write_unwrap(&self.get_type()?)?;
+        
+        Ok(0)
     }
 }   
