@@ -117,9 +117,9 @@ impl Len {
 impl Expression for Len {
     fn get_type(&self) -> Result<Type, String> {
         match self.expr.get_type()? {
-            Type::Arr(_) | Type::Str => Ok(Type::Int),
+            Type::Arr(_) | Type::Iter(_) | Type::Str => Ok(Type::Int),
             x => Err(format!(
-                "Len expression must be an array or string; got a {:?}", x
+                "Len expression must be an array, iterator, or string; got a {:?}", x
             )),
         }
     }
@@ -133,9 +133,16 @@ impl Expression for Len {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        self.get_type()?;  // just to check that inner type is an array
+        self.get_type()?;  // just to check that type is valid
         self.expr.compile(compiler)?;
         compiler.write_opcode(OpCode::Len);
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let expr_type = self.expr.get_type()?;
+        self.expr.wasmize(wasmizer)?;
+        wasmizer.write_len(&expr_type)?;
+        Ok(0)
     }
 }

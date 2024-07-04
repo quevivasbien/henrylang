@@ -85,23 +85,28 @@ fn test_objects() {
 }
 
 #[test]
+fn test_len() {
+    assert_eq!(run("len(\"hello\")"), "5");
+    assert_eq!(run("len(\"Ο Χένρι είναι ο πιο κουλ\")"), "24");
+    assert_eq!(run("len(\"😀\")"), "1");
+    assert_eq!(run("len([1, 2, 3])"), "3");
+    assert_eq!(run("len([\"hello\", \"there\"])"), "2");
+    assert_eq!(run("len(0 to 5)"), "6");
+    assert_eq!(run("len([]: Int)"), "0");
+    assert_eq!(run("len(|x:Int|{x} -> []:Int)"), "0");
+}
+
+#[test]
 fn test_maybe() {
-    assert_eq!(
-        run("unwrap(some(1), 0)"),
-        "1"
-    );
-    assert_eq!(
-        run("unwrap({}: Int, 0)"),
-        "0"
-    );
-    assert_eq!(
-        run("unwrap(some(\"Henry\"), \"Lenry\")"),
-        "Henry"
-    );
-    assert_eq!(
-        run("unwrap({}: Str, \"Lenry\")"),
-        "Lenry"
-    );
+    assert_eq!(run("unwrap(some(1), 0)"), "1");
+    assert_eq!(run("unwrap({}: Int, 0)"), "0");
+    assert_eq!(run("unwrap(some(\"Henry\"), \"Lenry\")"), "Henry");
+    assert_eq!(run("unwrap({}: Str, \"Lenry\")"), "Lenry");
+
+    assert_eq!(run("issome(some(1))"), "true");
+    assert_eq!(run("!issome({}: Int)"), "true");
+    assert_eq!(run("issome(some(\"Henry\"))"), "true");
+    assert_eq!(run("!issome({}: Str)"), "true");
 }
 
 #[test]
@@ -162,18 +167,12 @@ fn test_reduce() {
 
 #[test]
 fn test_filter() {
-    assert_eq!(
-        run("@filter(|x: Int| { x > 0 }, -3 to 3)"),
-        "[1, 2, 3]"
-    );
+    assert_eq!(run("@filter(|x: Int| { x > 0 }, -3 to 3)"), "[1, 2, 3]");
     assert_eq!(
         run("@filter(|x: Str| { x = \"Henry\" }, [\"Henry\", \"Lenry\", \"Henry\"])"),
         "[Henry, Henry]"
     );
-    assert_eq!(
-        run("@filter(|x: Int| { x > 0 }, 0 to -3)"),
-        "[]"
-    );
+    assert_eq!(run("@filter(|x: Int| { x > 0 }, 0 to -3)"), "[]");
     assert_eq!(
         run("first_is_positive := |x: Arr(Int)| { x(0) > 0 } @filter(first_is_positive, [[-1, 1, 2], [1, 2, 3]])"),
         "[[1, 2, 3]]"
@@ -182,10 +181,7 @@ fn test_filter() {
 
 #[test]
 fn test_zipmap() {
-    assert_eq!(
-        run("@zipmap(|x: Int| { x + 1 }, 0 to 3)"),
-        "[1, 2, 3, 4]"
-    );
+    assert_eq!(run("@zipmap(|x: Int| { x + 1 }, 0 to 3)"), "[1, 2, 3, 4]");
     assert_eq!(
         run("@zipmap(|x: Int, y: Int| { x * y }, 0 to 3, 0 to -3)"),
         "[0, -1, -4, -9]"

@@ -101,6 +101,7 @@ impl BuiltinFunc {
 
     // sets offset = fatptr >> 32 and size = fatptr & 0xFFFFFFFF
     pub fn set_offset_and_size(&mut self, fatptr_name: &str, offset_name: &str, size_name: &str) {
+        // offset = highest 32 bits of fatptr
         self.write_opcode(Opcode::LocalGet);
         self.write_var(fatptr_name);
         self.write_opcode(Opcode::I64Const);
@@ -109,7 +110,8 @@ impl BuiltinFunc {
         self.write_opcode(Opcode::I32WrapI64); // discard high 32 bits
         self.write_opcode(Opcode::LocalSet);
         self.write_var(offset_name); // set as offset
-                                     // size = lowest 32 bits of fatptr
+
+        // size = lowest 32 bits of fatptr
         self.write_opcode(Opcode::LocalGet);
         self.write_var(fatptr_name);
         self.write_opcode(Opcode::I32WrapI64); // discard high 32 bits
@@ -200,6 +202,22 @@ impl BuiltinFunc {
         let advance_fn_signature = unsigned_leb128(advance_fn_type_idx);
         self.write_opcode(Opcode::CallIndirect);
         self.write_slice(&advance_fn_signature);
+        self.write_byte(0x00); // table index
+    }
+
+    // Used to call the advance function on an iterator
+    pub fn iter_call_advance(&mut self, offset_name: &str, advance_fn_delta: u32, advance_fn_type_idx: u32) {
+        self.write_opcode(Opcode::LocalGet);
+        self.write_var(offset_name);
+        self.write_opcode(Opcode::LocalGet); // iter offset
+        self.write_var(offset_name);
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&unsigned_leb128(advance_fn_delta));
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Load);
+        self.write_slice(&[0x02, 0x00]); // advance fn
+        self.write_opcode(Opcode::CallIndirect);
+        self.write_slice(&unsigned_leb128(advance_fn_type_idx)); // signature index
         self.write_byte(0x00); // table index
     }
 

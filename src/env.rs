@@ -223,6 +223,7 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
         .get_function("main")
         .map_err(|e| format!("{}", e))?;
     let result = main.call(&mut store, &[]).map_err(|e| format!("{}", e))?;
+
     let result = match (&result[0], &typ) {
         (wasmer::Value::I32(i), Type::Int) => format!("{}", i),
         (wasmer::Value::I32(i), Type::Bool) => format!("{}", *i != 0),

@@ -542,6 +542,252 @@ impl Wasmizer {
         Ok(())
     }
 
+    pub fn write_len(&mut self, typ: &ast::Type) -> Result<(), String> {
+        match typ {
+            ast::Type::Arr(inner_type) => {
+                let inner_type = Numtype::from_ast_type(inner_type)?;
+                // extract size from fatptr
+                self.write_opcode(Opcode::I32WrapI64); // discard high 32 bits
+                // divide by size of inner type
+                self.write_opcode(Opcode::I32Const);
+                self.write_slice(&unsigned_leb128(inner_type.size()));
+                self.write_opcode(Opcode::I32DivU);
+                Ok(())
+            }
+            ast::Type::Iter(inner_type) => {
+                let inner_type = Numtype::from_ast_type(inner_type)?;
+                let iter_len_fn_idx = self.init_iter_len(inner_type)?;
+                self.write_opcode(Opcode::Call);
+                self.write_slice(&unsigned_leb128(iter_len_fn_idx));
+                Ok(())
+            }
+            ast::Type::Str => {
+                let str_len_fn_idx = self.init_str_len()?;
+                self.write_opcode(Opcode::Call);
+                self.write_slice(&unsigned_leb128(str_len_fn_idx));
+                Ok(())
+            }
+            _ => Err(format!("Cannot get length of type {:?}", typ)),
+        }
+    }
+
+    fn init_iter_len(&mut self, numtype: Numtype) -> Result<u32, String> {
+        let memsize = numtype.size();
+        let function_name = format!("iter_len_{}", memsize);
+        if let Some(idx) = self.builtins.get(&function_name) {
+            return Ok(*idx);
+        }
+
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I32)),
+            vec!["iter_fatptr".to_string()],
+        );
+        func.add_local("iter_offset", Numtype::I32);
+        func.add_local("count", Numtype::I32);
+        
+        // iter_offset = iter_fatpr >> 32
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("iter_fatptr");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("iter_offset");
+
+        func.write_opcode(Opcode::Loop);
+        func.write_byte(Numtype::Void as u8);
+
+        // call iterator->advance
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)));
+        func.iter_call_advance("iter_offset", memsize, advance_fn_type_idx);
+
+        // if !iterator->done
+        func.write_opcode(Opcode::I32Eqz);
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::Void as u8);
+        // count += 1
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("count");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("count");
+        // branch to loop
+        func.write_opcode(Opcode::Br);
+        func.write_byte(1);  // 1 since we need to leave the if statement
+
+        func.write_opcode(Opcode::End);  // end if
+
+        func.write_opcode(Opcode::End);  // end loop
+
+        // return count
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("count");
+
+        func.write_opcode(Opcode::End);  // end function
+
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(function_name, fn_idx);
+
+        Ok(fn_idx)
+    }
+
+    fn init_str_len(&mut self) -> Result<u32, String> {
+        if let Some(idx) = self.builtins.get("str_len") {
+            return Ok(*idx);
+        }
+
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I32)),
+            vec!["str_fatptr".to_string()],
+        );
+        func.add_local("offset", Numtype::I32);
+        func.add_local("size", Numtype::I32);
+        func.add_local("count", Numtype::I32);
+        func.add_local("leading_byte", Numtype::I32);
+
+        func.set_offset_and_size("str_fatptr", "offset", "size");
+
+        // loop:
+        // if offset == size: return count
+        // count += 1
+        // char_size := if first bit == 0 {
+        //     1
+        // }
+        // else {
+        //     if third bit == 0 {
+        //         2
+        //     }
+        //     else {
+        //         if fourth bit == 0 {
+        //             3
+        //         }
+        //         else {
+        //             4
+        //         }
+        //     }
+        // }
+        // offset += char_size
+        // branch to loop
+
+        func.write_opcode(Opcode::Loop);
+        func.write_byte(Numtype::I32 as u8);
+
+        // if offset == size: return count
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("size");
+        func.write_opcode(Opcode::I32Eq);
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::Void as u8);
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("count");
+        func.write_opcode(Opcode::Return);
+        func.write_opcode(Opcode::End);  // end if
+
+        // count += 1
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("count");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("count");
+
+        // now figure out size of current char
+        // read current byte
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Load8U);
+        func.write_slice(&[0x00, 0x00]);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("leading_byte");
+        
+        // first bit of leading byte == 1
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(7);
+        func.write_opcode(Opcode::I32ShrU);
+        func.write_opcode(Opcode::If);  // if #0
+        func.write_byte(Numtype::I32 as u8);
+
+        // third bit of leading byte == 1
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("leading_byte");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(5);
+        func.write_opcode(Opcode::I32ShrU);
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+        func.write_opcode(Opcode::I32And);
+
+        func.write_opcode(Opcode::If);  // if #1
+        func.write_byte(Numtype::I32 as u8);
+
+        // fourth bit of leading byte == 1
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("leading_byte");
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(4);
+        func.write_opcode(Opcode::I32ShrU);
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+        func.write_opcode(Opcode::I32And);
+
+        func.write_opcode(Opcode::If);  // if #2
+        func.write_byte(Numtype::I32 as u8);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(4);
+
+        // third bit of leading byte == 0
+        func.write_opcode(Opcode::Else);  // else #2
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(3);
+
+        func.write_opcode(Opcode::End);  // end if#2
+
+        // second bit of leading byte == 0
+        func.write_opcode(Opcode::Else);  // else #1
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(2);
+        
+        func.write_opcode(Opcode::End);  // end if#1
+
+        // first bit of leading byte == 0
+        func.write_opcode(Opcode::Else);  // else #0
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+
+        func.write_opcode(Opcode::End);  // end if#0
+
+        // current char number of bytes should now be on stack
+        // add that to offset
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("offset");
+
+        // branch to loop
+        func.write_opcode(Opcode::Br);
+        func.write_byte(0x00);
+
+        func.write_opcode(Opcode::End);  // end loop
+
+        func.write_opcode(Opcode::End);  // end function
+
+        let func_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert("str_len".to_string(), func_idx);
+
+        Ok(func_idx)
+    }
+
     pub fn write_some(&mut self, typ: &ast::Type) -> Result<(), String> {
         let numtype = Numtype::from_ast_type(typ)?;
         let constructor_idx = self.init_maybe(numtype)?;
@@ -604,6 +850,16 @@ impl Wasmizer {
         Ok(())
     }
 
+    pub fn write_is_some(&mut self, typ: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(typ)?;
+        let is_some_fn_idx = self.init_is_some(numtype)?;
+        
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&unsigned_leb128(is_some_fn_idx));
+
+        Ok(())
+    }
+
     fn init_unwrap(&mut self, numtype: Numtype) -> Result<u32, String> {
         let fn_name = format!("unwrap_{}", numtype);
 
@@ -631,7 +887,7 @@ impl Wasmizer {
 
         // get the is_some (second) field from the maybe_value
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&&unsigned_leb128(numtype.size())); // offset of is_some field
+        func.write_slice(&unsigned_leb128(numtype.size())); // offset of is_some field
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
@@ -650,6 +906,60 @@ impl Wasmizer {
 
         func.write_opcode(Opcode::LocalGet);
         func.write_var("default");
+
+        func.write_opcode(Opcode::End); // end if
+
+        func.write_opcode(Opcode::End); // end function
+
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(fn_name, fn_idx);
+
+        Ok(fn_idx)
+    }
+
+    fn init_is_some(&mut self, numtype: Numtype) -> Result<u32, String> {
+        let fn_name = format!("is_some_{}", numtype);
+
+        // check if the function has already been defined
+        if let Some(idx) = self.builtins.get(&fn_name) {
+            return Ok(*idx);
+        }
+
+        // define the function
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I32)),
+            vec!["maybe_value".to_string()],
+        );
+        func.add_local("maybe_value_offset", Numtype::I32);
+
+        // get the offset from the maybe_value fatptr
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("maybe_value");
+        func.write_opcode(Opcode::I64Const);
+        func.write_byte(0x20);
+        func.write_opcode(Opcode::I64ShrU);
+        func.write_opcode(Opcode::I32WrapI64);
+        func.write_opcode(Opcode::LocalTee);
+        func.write_var("maybe_value_offset");
+
+        // get the is_some (second) field from the maybe_value
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(numtype.size())); // offset of is_some field
+        func.write_opcode(Opcode::I32Add);
+        func.write_opcode(Opcode::I32Load);
+        func.write_slice(&[0x02, 0x00]);
+
+        // if is_some is 1, return 1 (true), otherwise return 0 (false)
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::I32 as u8);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);
+
+        func.write_opcode(Opcode::Else);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0);
 
         func.write_opcode(Opcode::End); // end if
 
@@ -2059,22 +2369,11 @@ impl Wasmizer {
         func.write_byte(Numtype::Void as u8);
 
         // call iterator->advance
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("iter_offset");
-        func.write_opcode(Opcode::LocalGet); // iter offset
-        func.write_var("iter_offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(memsize));
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]); // advance fn
-        let functype_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
             vec![Numtype::I32],
             Some(Numtype::I32),
         ));
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&unsigned_leb128(functype_idx)); // signature index
-        func.write_byte(0x00); // table index
+        func.iter_call_advance("iter_offset", memsize, advance_fn_type_idx);
 
         // branch if result != 1
         func.write_opcode(Opcode::If);

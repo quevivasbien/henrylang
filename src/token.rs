@@ -46,11 +46,13 @@ pub enum TokenType {
     True,
     False,
     To,
-    Some,
     Reduce,
     Filter,
     Len,
     ZipMap,
+    
+    Some,
+    IsSome,
     Unwrap,
 
     Error,
@@ -88,11 +90,12 @@ lazy_static! {
         map.insert("true", TokenType::True);
         map.insert("false", TokenType::False);
         map.insert("to", TokenType::To);
-        map.insert("some", TokenType::Some);
         map.insert("reduce", TokenType::Reduce);
         map.insert("filter", TokenType::Filter);
         map.insert("len", TokenType::Len);
         map.insert("zipmap", TokenType::ZipMap);
+        map.insert("some", TokenType::Some);
+        map.insert("issome", TokenType::IsSome);
         map.insert("unwrap", TokenType::Unwrap);
 
         map
