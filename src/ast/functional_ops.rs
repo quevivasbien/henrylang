@@ -17,17 +17,55 @@ impl Map {
             parent: None,
         }
     }
+
+    // Get the types associated with this expression
+    // Returns the inner type of the result, the inner type of the object iterated over, and if that object is an array
+    // Return format is (result_inner_type, input_inner_type, is_array)
+    fn get_type_info(&self) -> Result<(Type, Type, bool), String> {
+        let left_type = self.left.get_type()?;
+        let right_type = self.right.get_type()?;
+
+        let (input_inner_type, input_is_array) = match &right_type {
+            Type::Iter(arr_type) => (*arr_type.clone(), false),
+            Type::Arr(arr_type) => (*arr_type.clone(), true),
+            _ => {
+                return Err(format!(
+                    "Operand on right of '->' must be an iterator or array type; got {:?}",
+                    right_type
+                ));
+            }
+        };
+
+        let result_inner_type = match &left_type {
+            Type::Arr(result_type) => {
+                if input_inner_type != Type::Int {
+                    return Err(format!(
+                        "Cannot map from type {:?} using non-integer type {:?}",
+                        left_type, input_inner_type
+                    ));
+                }
+                *result_type.clone()
+            }
+            Type::Func(arg_type, result_type) => {
+                if arg_type.len() != 1 {
+                    return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
+                }
+                if arg_type[0] != input_inner_type {
+                    return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", input_inner_type, arg_type[0]));
+                }
+                *result_type.clone()
+            }
+            typ => return Err(format!("Cannot map with type {:?}", typ)),
+        };
+
+        Ok((result_inner_type, input_inner_type, input_is_array))
+    }
 }
 
 impl Expression for Map {
     fn get_type(&self) -> Result<Type, String> {
-        let left_type = self.left.get_type()?;
-        match left_type {
-            Type::Func(_, typ) => Ok(Type::Iter(Box::new(*typ))),
-            Type::Arr(typ) => Ok(Type::Iter(Box::new(*typ))),
-            Type::Str => Ok(Type::Iter(Box::new(Type::Str))),
-            typ => Err(format!("Cannot use '->' on type {:?}", typ)),
-        }
+        let (result_inner_type, _, _) = self.get_type_info()?;
+        Ok(Type::Iter(Box::new(result_inner_type)))
     }
 
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
@@ -61,54 +99,29 @@ impl Expression for Map {
     }
 
     fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
-        let left_type = self.left.get_type()?;
-        let right_type = self.right.get_type()?;
-
+        self.get_type_info()?; // check that types are all in order
         self.left.compile(compiler)?;
         self.right.compile(compiler)?;
 
-        if let Type::Iter(arr_type) | Type::Arr(arr_type) = &right_type {
-            match &left_type {
-                Type::Arr(_) => {
-                    if arr_type.as_ref() != &Type::Int {
-                        return Err(format!(
-                            "Cannot map from type {:?} using non-integer type {:?}",
-                            left_type, arr_type
-                        ));
-                    }
-                }
-                Type::Func(arg_type, _) => {
-                    if arg_type.len() != 1 {
-                        return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
-                    }
-                    if &arg_type[0] != arr_type.as_ref() {
-                        return Err(format!("Function used for mapping must have an argument of type {:?} to match the array mapped over; got {:?}", arr_type, arg_type[0]));
-                    }
-                }
-                typ => return Err(format!("Cannot map with type {:?}", typ)),
-            }
-            compiler.write_opcode(OpCode::Map);
-            return Ok(());
-        }
-        return Err(format!(
-            "Operand on right of '->' must be an array type; got {:?}",
-            right_type
-        ));
+        compiler.write_opcode(OpCode::Map);
+        Ok(())
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
-        let left_type = self.left.get_type()?;
-        let right_type = self.right.get_type()?;
+        let (result_inner_type, input_inner_type, input_is_array) = self.get_type_info()?;
 
         self.left.wasmize(wasmizer)?;
         self.right.wasmize(wasmizer)?;
 
-        match &left_type {
+        match self.left.get_type()? {
             Type::Arr(_) => {
-                unimplemented!("map from array")
+                // TODO
+                return Err(format!(
+                    "Mapping from array is not yet implemented in WASM mode"
+                ));
             }
             Type::Func(..) => {
-                wasmizer.write_map(&left_type, &right_type)?;
+                wasmizer.write_map(&result_inner_type, &input_inner_type, input_is_array)?;
             }
             typ => return Err(format!("Cannot map with type {:?}", typ)),
         }
@@ -383,7 +396,7 @@ impl ZipMap {
                 func_arg_types, iter_over_types
             ));
         }
-        
+
         Ok((func_ret_type, iter_over_types, iter_overs_are_arrays))
     }
 }
@@ -437,9 +450,14 @@ impl Expression for ZipMap {
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let (func_ret_type, iter_over_types, iter_overs_are_arrays) = self.get_type_info()?;
-        
+
         self.function.wasmize(wasmizer)?;
-        for ((expr, is_array), inner_type) in self.exprs.iter().zip(iter_overs_are_arrays.into_iter()).zip(iter_over_types.iter()) {
+        for ((expr, is_array), inner_type) in self
+            .exprs
+            .iter()
+            .zip(iter_overs_are_arrays.into_iter())
+            .zip(iter_over_types.iter())
+        {
             expr.wasmize(wasmizer)?;
             if is_array {
                 wasmizer.make_array_iter(inner_type)?;

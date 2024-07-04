@@ -548,7 +548,7 @@ impl Wasmizer {
 
         // Constructor requires 2 arguments: value and is_some. Value is already on stack.
         self.write_opcode(Opcode::I32Const);
-        self.write_byte(1);  // yes, this is some
+        self.write_byte(1); // yes, this is some
 
         // Call the constructor
         self.write_opcode(Opcode::Call);
@@ -568,7 +568,7 @@ impl Wasmizer {
             _ => self.write_byte(0),
         };
         self.write_opcode(Opcode::I32Const);
-        self.write_byte(0);  // no, this is null
+        self.write_byte(0); // no, this is null
 
         // Call the constructor
         self.write_opcode(Opcode::Call);
@@ -600,7 +600,7 @@ impl Wasmizer {
 
         self.write_opcode(Opcode::Call);
         self.write_slice(&unsigned_leb128(unwrap_fn_idx));
-        
+
         Ok(())
     }
 
@@ -631,7 +631,7 @@ impl Wasmizer {
 
         // get the is_some (second) field from the maybe_value
         func.write_opcode(Opcode::I32Const);
-        func.write_slice(&&unsigned_leb128(numtype.size()));  // offset of is_some field
+        func.write_slice(&&unsigned_leb128(numtype.size())); // offset of is_some field
         func.write_opcode(Opcode::I32Add);
         func.write_opcode(Opcode::I32Load);
         func.write_slice(&[0x02, 0x00]);
@@ -651,16 +651,15 @@ impl Wasmizer {
         func.write_opcode(Opcode::LocalGet);
         func.write_var("default");
 
-        func.write_opcode(Opcode::End);  // end if
+        func.write_opcode(Opcode::End); // end if
 
-        func.write_opcode(Opcode::End);  // end function
+        func.write_opcode(Opcode::End); // end function
 
         let fn_idx = self.builder.add_builtin(&func)?;
         self.builtins.insert(fn_name, fn_idx);
 
         Ok(fn_idx)
     }
-
 
     // convert an array on the stack into an array iterator
     pub fn make_array_iter(&mut self, inner_type: &ast::Type) -> Result<(), String> {
@@ -674,37 +673,19 @@ impl Wasmizer {
 
     pub fn write_map(
         &mut self,
-        left_type: &ast::Type,
-        right_type: &ast::Type,
+        result_inner_type: &ast::Type,
+        input_inner_type: &ast::Type,
+        input_is_array: bool,
     ) -> Result<(), String> {
-        let inner_type = match right_type {
-            ast::Type::Iter(inner_type) => inner_type,
-            ast::Type::Arr(array_inner_type) => {
-                // convert the Array into an ArrayIter first
-                self.make_array_iter(array_inner_type)?;
-                array_inner_type
-            }
-            _ => {
-                return Err(format!(
-                    "Operand on right of '->' must be an array type; got {:?}",
-                    right_type
-                ))
-            }
-        };
-
-        // check that the left type is a compatible function type
-        let arg_type = match left_type {
-            ast::Type::Func(arg_type, _) => arg_type,
-            _ => unreachable!(),
-        };
-        if arg_type.len() != 1 {
-            return Err(format!("Cannot map with a function that does not have a single argument; got a function with {} arguments", arg_type.len()));
-        }
-        if &arg_type[0] != inner_type.as_ref() {
-            return Err(format!("Function used for mapping must have an argument of type {:?} to match the type mapped over; got {:?}", inner_type, arg_type[0]));
+        if input_is_array {
+            self.make_array_iter(input_inner_type)?;
         }
 
-        let factory = unsigned_leb128(self.get_map_iter_factory(left_type)?);
+        let result_inner_type = Numtype::from_ast_type(result_inner_type)?;
+        let input_inner_type = Numtype::from_ast_type(input_inner_type)?;
+
+        let factory =
+            unsigned_leb128(self.get_map_iter_factory(input_inner_type, result_inner_type)?);
         self.write_opcode(Opcode::Call);
         self.write_slice(&factory);
 
@@ -751,10 +732,18 @@ impl Wasmizer {
         Ok(())
     }
 
-    pub fn write_zipmap(&mut self, func_ret_type: &ast::Type, iter_over_types: &[ast::Type]) -> Result<(), String> {
+    pub fn write_zipmap(
+        &mut self,
+        func_ret_type: &ast::Type,
+        iter_over_types: &[ast::Type],
+    ) -> Result<(), String> {
         let func_ret_type = Numtype::from_ast_type(func_ret_type)?;
-        let iter_over_types = iter_over_types.iter().map(Numtype::from_ast_type).collect::<Result<Vec<_>, _>>()?;
-        let factory = unsigned_leb128(self.get_zipmap_iter_factory(func_ret_type, &iter_over_types)?);
+        let iter_over_types = iter_over_types
+            .iter()
+            .map(Numtype::from_ast_type)
+            .collect::<Result<Vec<_>, _>>()?;
+        let factory =
+            unsigned_leb128(self.get_zipmap_iter_factory(func_ret_type, &iter_over_types)?);
         self.write_opcode(Opcode::Call);
         self.write_slice(&factory);
         Ok(())
@@ -1278,23 +1267,7 @@ impl Wasmizer {
     }
 
     // create a struct type that is used to store map iterators
-    fn get_map_iter_factory(&mut self, func_type: &ast::Type) -> Result<u32, String> {
-        let (in_type, out_type) = match func_type {
-            ast::Type::Func(args, ret) => {
-                if args.len() != 1 {
-                    return Err(format!(
-                        "Mapping function must take 1 argument, but got a function with {}",
-                        args.len()
-                    ));
-                }
-                (
-                    Numtype::from_ast_type(&args[0])?,
-                    Numtype::from_ast_type(ret.as_ref())?,
-                )
-            }
-            _ => unreachable!("This function should not be called with a non-function type"),
-        };
-
+    fn get_map_iter_factory(&mut self, in_type: Numtype, out_type: Numtype) -> Result<u32, String> {
         let factory_name = format!("<MapIter[{}->{}]Factory>", in_type, out_type);
         if let Some(idx) = self.builtins.get(&factory_name) {
             // no need to do anything else if there's already a factory for this type mapping
@@ -1354,10 +1327,9 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // pass inner_current to mapping fn
-        let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![in_type],
-            Some(out_type),
-        ));
+        let map_fn_type_idx = self
+            .builder
+            .get_functype_idx(&FuncTypeSignature::new(vec![in_type], Some(out_type)));
         func.iter_call_map_fn("offset", map_fn_delta, map_fn_type_idx);
 
         // // When the current value is an I64 (heap object), we need to also copy the memory for that value
@@ -1495,9 +1467,10 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // pass acc and x to reduce_fn
-        let reduce_fn_type_idx = self.builder.get_functype_idx(
-            &FuncTypeSignature::new(vec![acc_type, x_type], Some(acc_type)),
-        );
+        let reduce_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![acc_type, x_type],
+            Some(acc_type),
+        ));
         func.iter_call_map_fn("offset", reduce_fn_delta, reduce_fn_type_idx);
 
         // set as new acc (current) value
@@ -1709,7 +1682,11 @@ impl Wasmizer {
         Ok(factory_idx)
     }
 
-    fn get_zipmap_iter_factory(&mut self, out_type: Numtype, iter_over_types: &[Numtype]) -> Result<u32, String> {
+    fn get_zipmap_iter_factory(
+        &mut self,
+        out_type: Numtype,
+        iter_over_types: &[Numtype],
+    ) -> Result<u32, String> {
         let factory_name = format!("<ZipMapIter[{:?}->{}]Factory>", iter_over_types, out_type);
         if let Some(idx) = self.builtins.get(&factory_name) {
             return Ok(*idx);
@@ -1722,14 +1699,18 @@ impl Wasmizer {
         ];
         // add a field for each inner iterator
         for i in 0..iter_over_types.len() {
-            struct_fields.push((
-                format!("inner_{}_offset", i),
-                Numtype::I32,
-            ));
+            struct_fields.push((format!("inner_{}_offset", i), Numtype::I32));
         }
         let struct_def = Struct::new(struct_fields);
 
-        let inner_offset_deltas = (0..iter_over_types.len()).map(|i| struct_def.get_field(&format!("inner_{}_offset", i)).unwrap().offset).collect::<Vec<_>>();
+        let inner_offset_deltas = (0..iter_over_types.len())
+            .map(|i| {
+                struct_def
+                    .get_field(&format!("inner_{}_offset", i))
+                    .unwrap()
+                    .offset
+            })
+            .collect::<Vec<_>>();
         let map_fn_delta = struct_def.get_field("map_fn").unwrap().offset;
 
         let struct_name = format!("<ZipMapIter[{:?}->{}]>", iter_over_types, out_type);
@@ -1748,7 +1729,11 @@ impl Wasmizer {
             vec![Numtype::I32],
             Some(Numtype::I32),
         ));
-        for (i, (inner_offset_delta, inner_type)) in inner_offset_deltas.into_iter().zip(iter_over_types.iter()).enumerate() {
+        for (i, (inner_offset_delta, inner_type)) in inner_offset_deltas
+            .into_iter()
+            .zip(iter_over_types.iter())
+            .enumerate()
+        {
             func.iter_call_advance_on_inner(
                 "offset",
                 &format!("inner_{}_offset", i),
@@ -1771,7 +1756,7 @@ impl Wasmizer {
         func.write_byte(Numtype::I32 as u8);
 
         func.write_opcode(Opcode::I32Const);
-        func.write_byte(1);  // done = true
+        func.write_byte(1); // done = true
 
         // else, update current value
         func.write_opcode(Opcode::Else);
@@ -1785,7 +1770,10 @@ impl Wasmizer {
         }
 
         // call map fn
-        let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(iter_over_types.to_vec(), Some(out_type)));
+        let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            iter_over_types.to_vec(),
+            Some(out_type),
+        ));
         func.iter_call_map_fn("offset", map_fn_delta, map_fn_type_idx);
 
         // set as new current value
@@ -1803,9 +1791,9 @@ impl Wasmizer {
         func.write_opcode(Opcode::I32Const);
         func.write_byte(0);
 
-        func.write_opcode(Opcode::End);  // end if
+        func.write_opcode(Opcode::End); // end if
 
-        func.write_opcode(Opcode::End);  // end function
+        func.write_opcode(Opcode::End); // end function
 
         let advance_fn_idx = self.builder.add_builtin(&func)?;
         self.builtins.insert(
@@ -1817,11 +1805,15 @@ impl Wasmizer {
         let argtypes = [
             vec![Numtype::I32],
             vec![Numtype::I64; iter_over_types.len()],
-        ].concat();
+        ]
+        .concat();
         let param_names = [
             vec!["map_fn".to_string()],
-            (0..iter_over_types.len()).map(|i| format!("iter_over_{}", i)).collect::<Vec<_>>(),
-        ].concat();
+            (0..iter_over_types.len())
+                .map(|i| format!("iter_over_{}", i))
+                .collect::<Vec<_>>(),
+        ]
+        .concat();
         let mut func = BuiltinFunc::new(
             FuncTypeSignature::new(argtypes, Some(Numtype::I64)),
             param_names,
