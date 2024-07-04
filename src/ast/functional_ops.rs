@@ -349,10 +349,10 @@ impl ZipMap {
             parent: None,
         }
     }
-}
 
-impl Expression for ZipMap {
-    fn get_type(&self) -> Result<Type, String> {
+    // get the inner type of the result, the inner types of each of the objects iterated over, and whether each of the objects iterated over are arrays.
+    // returns (result_type, iter_over_types, iter_overs_are_arrays)
+    fn get_type_info(&self) -> Result<(Type, Vec<Type>, Vec<bool>), String> {
         let (func_arg_types, func_ret_type) = match self.function.get_type()? {
             Type::Func(arg, ret) | Type::TypeDef(arg, ret) => (arg, *ret),
             x => {
@@ -362,10 +362,13 @@ impl Expression for ZipMap {
                 ))
             }
         };
-        let mut expr_types = Vec::new();
+        let mut iter_over_types = Vec::new();
+        let mut iter_overs_are_arrays = Vec::new();
         for expr in self.exprs.iter() {
-            match expr.get_type()? {
-                Type::Arr(t) | Type::Iter(t) => expr_types.push(*t),
+            let typ = expr.get_type()?;
+            iter_overs_are_arrays.push(matches!(typ, Type::Arr(_)));
+            match typ {
+                Type::Arr(t) | Type::Iter(t) => iter_over_types.push(*t),
                 x => {
                     return Err(format!(
                         "ZipMap expression must be an array or iterator; got a {:?}",
@@ -374,12 +377,20 @@ impl Expression for ZipMap {
                 }
             }
         }
-        if func_arg_types != expr_types {
+        if func_arg_types != iter_over_types {
             return Err(format!(
                 "ZipMap function argument and arrays must have matching types; got {:?} and {:?}",
-                func_arg_types, expr_types
+                func_arg_types, iter_over_types
             ));
         }
+        
+        Ok((func_ret_type, iter_over_types, iter_overs_are_arrays))
+    }
+}
+
+impl Expression for ZipMap {
+    fn get_type(&self) -> Result<Type, String> {
+        let (func_ret_type, _, _) = self.get_type_info()?;
         Ok(Type::Iter(Box::new(func_ret_type)))
     }
     fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
@@ -422,5 +433,19 @@ impl Expression for ZipMap {
         self.function.compile(compiler)?;
         compiler.write_opcode(OpCode::ZipMap);
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        let (func_ret_type, iter_over_types, iter_overs_are_arrays) = self.get_type_info()?;
+        
+        self.function.wasmize(wasmizer)?;
+        for ((expr, is_array), inner_type) in self.exprs.iter().zip(iter_overs_are_arrays.into_iter()).zip(iter_over_types.iter()) {
+            expr.wasmize(wasmizer)?;
+            if is_array {
+                wasmizer.make_array_iter(inner_type)?;
+            }
+        }
+        wasmizer.write_zipmap(&func_ret_type, &iter_over_types)?;
+        return Ok(0);
     }
 }

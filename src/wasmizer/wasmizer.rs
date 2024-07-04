@@ -661,6 +661,17 @@ impl Wasmizer {
         Ok(fn_idx)
     }
 
+
+    // convert an array on the stack into an array iterator
+    pub fn make_array_iter(&mut self, inner_type: &ast::Type) -> Result<(), String> {
+        let numtype = Numtype::from_ast_type(inner_type)?;
+        let factory = unsigned_leb128(self.get_array_iter_factory(numtype)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&factory);
+
+        Ok(())
+    }
+
     pub fn write_map(
         &mut self,
         left_type: &ast::Type,
@@ -670,9 +681,7 @@ impl Wasmizer {
             ast::Type::Iter(inner_type) => inner_type,
             ast::Type::Arr(array_inner_type) => {
                 // convert the Array into an ArrayIter first
-                let factory = unsigned_leb128(self.get_array_iter_factory(array_inner_type)?);
-                self.write_opcode(Opcode::Call);
-                self.write_slice(&factory);
+                self.make_array_iter(array_inner_type)?;
                 array_inner_type
             }
             _ => {
@@ -710,9 +719,7 @@ impl Wasmizer {
     ) -> Result<(), String> {
         if use_array_iter {
             // convert the Array into an ArrayIter first
-            let factory = unsigned_leb128(self.get_array_iter_factory(x_type)?);
-            self.write_opcode(Opcode::Call);
-            self.write_slice(&factory);
+            self.make_array_iter(x_type)?;
         }
 
         let acc_type = Numtype::from_ast_type(acc_type)?;
@@ -733,9 +740,7 @@ impl Wasmizer {
     pub fn write_filter(&mut self, typ: &ast::Type, use_array_iter: bool) -> Result<(), String> {
         if use_array_iter {
             // convert the Array into an ArrayIter first
-            let factory = unsigned_leb128(self.get_array_iter_factory(typ)?);
-            self.write_opcode(Opcode::Call);
-            self.write_slice(&factory);
+            self.make_array_iter(typ)?;
         }
 
         let numtype = Numtype::from_ast_type(typ)?;
@@ -743,6 +748,15 @@ impl Wasmizer {
         self.write_opcode(Opcode::Call);
         self.write_slice(&factory);
 
+        Ok(())
+    }
+
+    pub fn write_zipmap(&mut self, func_ret_type: &ast::Type, iter_over_types: &[ast::Type]) -> Result<(), String> {
+        let func_ret_type = Numtype::from_ast_type(func_ret_type)?;
+        let iter_over_types = iter_over_types.iter().map(Numtype::from_ast_type).collect::<Result<Vec<_>, _>>()?;
+        let factory = unsigned_leb128(self.get_zipmap_iter_factory(func_ret_type, &iter_over_types)?);
+        self.write_opcode(Opcode::Call);
+        self.write_slice(&factory);
         Ok(())
     }
 
@@ -1313,7 +1327,7 @@ impl Wasmizer {
             vec![Numtype::I32],
             Some(Numtype::I32),
         ));
-        func.call_advance_on_inner(
+        func.iter_call_advance_on_inner(
             "offset",
             "inner_offset",
             inner_offset_delta,
@@ -1340,22 +1354,11 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // pass inner_current to mapping fn
-        // get mapping fn
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(map_fn_delta)); // index of map_fn within map iterator
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        // call
-        let map_fn_signature = unsigned_leb128(
-            self.builder
-                .get_functype_idx(&FuncTypeSignature::new(vec![in_type], Some(out_type))),
-        );
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&map_fn_signature);
-        func.write_byte(0x00); // table index
+        let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![in_type],
+            Some(out_type),
+        ));
+        func.iter_call_map_fn("offset", map_fn_delta, map_fn_type_idx);
 
         // // When the current value is an I64 (heap object), we need to also copy the memory for that value
         // if in_type == Numtype::I64 {
@@ -1368,12 +1371,11 @@ impl Wasmizer {
         func.write_opcode(Opcode::LocalSet);
         func.write_var("current");
 
-        let store_op = out_type.store_op();
         func.write_opcode(Opcode::LocalGet);
         func.write_var("offset");
         func.write_opcode(Opcode::LocalGet);
         func.write_var("current");
-        func.write_opcode(store_op);
+        func.write_opcode(out_type.store_op());
         func.write_slice(&[0x02, 0x00]);
 
         // return 0 (for not done)
@@ -1419,6 +1421,7 @@ impl Wasmizer {
         func.write_byte(0x20);
         func.write_opcode(Opcode::I64ShrU);
         func.write_opcode(Opcode::I32WrapI64);
+
         func.write_opcode(Opcode::Call);
         func.write_slice(&unsigned_leb128(constructor_idx));
 
@@ -1459,7 +1462,7 @@ impl Wasmizer {
             vec![Numtype::I32],
             Some(Numtype::I32),
         ));
-        func.call_advance_on_inner(
+        func.iter_call_advance_on_inner(
             "offset",
             "inner_offset",
             inner_offset_delta,
@@ -1492,21 +1495,10 @@ impl Wasmizer {
         func.write_slice(&[0x02, 0x00]);
 
         // pass acc and x to reduce_fn
-        // get reduce_fn
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(reduce_fn_delta));
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        // call
-        let reduce_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
+        let reduce_fn_type_idx = self.builder.get_functype_idx(
             &FuncTypeSignature::new(vec![acc_type, x_type], Some(acc_type)),
-        ));
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&reduce_fn_signature);
-        func.write_byte(0x00); // table index
+        );
+        func.iter_call_map_fn("offset", reduce_fn_delta, reduce_fn_type_idx);
 
         // set as new acc (current) value
         func.write_opcode(Opcode::LocalSet);
@@ -1611,7 +1603,7 @@ impl Wasmizer {
             vec![Numtype::I32],
             Some(Numtype::I32),
         ));
-        func.call_advance_on_inner(
+        func.iter_call_advance_on_inner(
             "offset",
             "inner_offset",
             inner_offset_delta,
@@ -1638,21 +1630,11 @@ impl Wasmizer {
         func.write_var("inner_current");
 
         // pass to filter fn
-        // get filter fn
-        func.write_opcode(Opcode::LocalGet);
-        func.write_var("offset");
-        func.write_opcode(Opcode::I32Const);
-        func.write_slice(&unsigned_leb128(filter_fn_delta));
-        func.write_opcode(Opcode::I32Add);
-        func.write_opcode(Opcode::I32Load);
-        func.write_slice(&[0x02, 0x00]);
-        // call
-        let filter_fn_signature = unsigned_leb128(self.builder.get_functype_idx(
-            &FuncTypeSignature::new(vec![inner_type], Some(Numtype::I32)),
+        let filter_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![inner_type],
+            Some(Numtype::I32),
         ));
-        func.write_opcode(Opcode::CallIndirect);
-        func.write_slice(&filter_fn_signature);
-        func.write_byte(0x00); // table index
+        func.iter_call_map_fn("offset", filter_fn_delta, filter_fn_type_idx);
 
         // if result is false (0), branch to start of loop
         func.write_opcode(Opcode::I32Eqz);
@@ -1727,9 +1709,162 @@ impl Wasmizer {
         Ok(factory_idx)
     }
 
-    fn get_array_iter_factory(&mut self, array_inner_type: &ast::Type) -> Result<u32, String> {
-        let numtype = Numtype::from_ast_type(array_inner_type)?;
+    fn get_zipmap_iter_factory(&mut self, out_type: Numtype, iter_over_types: &[Numtype]) -> Result<u32, String> {
+        let factory_name = format!("<ZipMapIter[{:?}->{}]Factory>", iter_over_types, out_type);
+        if let Some(idx) = self.builtins.get(&factory_name) {
+            return Ok(*idx);
+        }
 
+        let mut struct_fields = vec![
+            ("current".to_string(), out_type),
+            ("advance_fn".to_string(), Numtype::I32),
+            ("map_fn".to_string(), Numtype::I32), // the table index of the map function
+        ];
+        // add a field for each inner iterator
+        for i in 0..iter_over_types.len() {
+            struct_fields.push((
+                format!("inner_{}_offset", i),
+                Numtype::I32,
+            ));
+        }
+        let struct_def = Struct::new(struct_fields);
+
+        let inner_offset_deltas = (0..iter_over_types.len()).map(|i| struct_def.get_field(&format!("inner_{}_offset", i)).unwrap().offset).collect::<Vec<_>>();
+        let map_fn_delta = struct_def.get_field("map_fn").unwrap().offset;
+
+        let struct_name = format!("<ZipMapIter[{:?}->{}]>", iter_over_types, out_type);
+        let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
+
+        // initialize advance fn
+        let mut func = BuiltinFunc::advance_fn_template();
+        for i in 0..iter_over_types.len() {
+            func.add_local(&format!("inner_{}_offset", i), Numtype::I32);
+        }
+        func.add_local("current", out_type);
+        func.add_local("done", Numtype::I32);
+
+        // call advance on *each* of the inner iterators
+        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
+        ));
+        for (i, (inner_offset_delta, inner_type)) in inner_offset_deltas.into_iter().zip(iter_over_types.iter()).enumerate() {
+            func.iter_call_advance_on_inner(
+                "offset",
+                &format!("inner_{}_offset", i),
+                inner_offset_delta,
+                *inner_type,
+                advance_fn_type_idx,
+            );
+            // accumulate "done" value
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("done");
+            func.write_opcode(Opcode::I32Or);
+            func.write_opcode(Opcode::LocalSet);
+            func.write_var("done");
+        }
+
+        // if "done" is true, we are done
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("done");
+        func.write_opcode(Opcode::If);
+        func.write_byte(Numtype::I32 as u8);
+
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(1);  // done = true
+
+        // else, update current value
+        func.write_opcode(Opcode::Else);
+
+        // put all the inner current values on the stack
+        for (i, numtype) in iter_over_types.iter().enumerate() {
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var(&format!("inner_{}_offset", i));
+            func.write_opcode(numtype.load_op());
+            func.write_slice(&[0x02, 0x00]);
+        }
+
+        // call map fn
+        let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(iter_over_types.to_vec(), Some(out_type)));
+        func.iter_call_map_fn("offset", map_fn_delta, map_fn_type_idx);
+
+        // set as new current value
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("current");
+
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("offset");
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("current");
+        func.write_opcode(out_type.store_op());
+        func.write_slice(&[0x02, 0x00]);
+
+        // return 0 (for not done)
+        func.write_opcode(Opcode::I32Const);
+        func.write_byte(0);
+
+        func.write_opcode(Opcode::End);  // end if
+
+        func.write_opcode(Opcode::End);  // end function
+
+        let advance_fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(
+            format!("<ZipMapIter[{:?}->{}]Advance>", iter_over_types, out_type),
+            advance_fn_idx,
+        );
+
+        // create helper function for building map iterators from `<fn>, [<iter0>, <iter1>, ...]` syntax
+        let argtypes = [
+            vec![Numtype::I32],
+            vec![Numtype::I64; iter_over_types.len()],
+        ].concat();
+        let param_names = [
+            vec!["map_fn".to_string()],
+            (0..iter_over_types.len()).map(|i| format!("iter_over_{}", i)).collect::<Vec<_>>(),
+        ].concat();
+        let mut func = BuiltinFunc::new(
+            FuncTypeSignature::new(argtypes, Some(Numtype::I64)),
+            param_names,
+        );
+
+        // initialize current to 0
+        func.write_opcode(out_type.const_op());
+        match out_type {
+            Numtype::F32 => func.write_slice(&[0x00, 0x00, 0x00, 0x00]),
+            _ => func.write_byte(0x00),
+        };
+        // advance fn
+        func.write_opcode(Opcode::I32Const);
+        func.write_slice(&unsigned_leb128(
+            // need to subtract number of imports, since this will be called indirectly, and imports are not included in the function table
+            advance_fn_idx - self.builder.imports.len() as u32,
+        ));
+        // map fn
+        func.write_opcode(Opcode::LocalGet);
+        func.write_var("map_fn");
+        // each of the iterators
+        for i in 0..iter_over_types.len() {
+            // iter_offset = iter_over >> 32
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var(&format!("iter_over_{}", i));
+            func.write_opcode(Opcode::I64Const);
+            func.write_byte(0x20);
+            func.write_opcode(Opcode::I64ShrU);
+            func.write_opcode(Opcode::I32WrapI64);
+        }
+
+        func.write_opcode(Opcode::Call);
+        func.write_slice(&unsigned_leb128(constructor_idx));
+
+        func.write_opcode(Opcode::End);
+
+        let factory_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(factory_name, factory_idx);
+
+        Ok(factory_idx)
+    }
+
+    fn get_array_iter_factory(&mut self, numtype: Numtype) -> Result<u32, String> {
         let factory_name = format!("<ArrIter[{}]Factory>", numtype);
         if let Some(idx) = self.builtins.get(&factory_name) {
             // no need to add it if we already have it

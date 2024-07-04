@@ -179,3 +179,23 @@ fn test_filter() {
         "[[1, 2, 3]]"
     );
 }
+
+#[test]
+fn test_zipmap() {
+    assert_eq!(
+        run("@zipmap(|x: Int| { x + 1 }, 0 to 3)"),
+        "[1, 2, 3, 4]"
+    );
+    assert_eq!(
+        run("@zipmap(|x: Int, y: Int| { x * y }, 0 to 3, 0 to -3)"),
+        "[0, -1, -4, -9]"
+    );
+    assert_eq!(
+        run("@zipmap(|x: Int, y: Int| { x + y }, [1, 2, 3], [4, 5, 6])"),
+        "[5, 7, 9]"
+    );
+    assert_eq!(
+        run("@zipmap(|x:Str, y:Str|{x+ \" \" +y}, [\"Henry\", \"Lenry\", \"Glenry\"], [\"is cool\", \"is not cool\"])"),
+        "[Henry is cool, Lenry is not cool]"
+    );
+}

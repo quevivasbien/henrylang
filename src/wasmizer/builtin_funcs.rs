@@ -172,7 +172,7 @@ impl BuiltinFunc {
     // Used to call the advance function on an iterator within an iterator
     // Also sets the value of the inner_offset variable
     // Meant to be used as part of the `advance` function for the [outer] iterator
-    pub fn call_advance_on_inner(
+    pub fn iter_call_advance_on_inner(
         &mut self,
         offset_name: &str,
         inner_offset_name: &str,
@@ -200,6 +200,22 @@ impl BuiltinFunc {
         let advance_fn_signature = unsigned_leb128(advance_fn_type_idx);
         self.write_opcode(Opcode::CallIndirect);
         self.write_slice(&advance_fn_signature);
+        self.write_byte(0x00); // table index
+    }
+
+    // Used to call map (or filter or whatever) function within an iterator
+    // Meant to be used as part of the `advance` function for the [outer] iterator
+    pub fn iter_call_map_fn(&mut self, offset_name: &str, map_fn_delta: u32, map_fn_type_idx: u32) {
+        self.write_opcode(Opcode::LocalGet);
+        self.write_var(offset_name);
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&unsigned_leb128(map_fn_delta)); // index of map_fn within map iterator
+        self.write_opcode(Opcode::I32Add);
+        self.write_opcode(Opcode::I32Load);
+        self.write_slice(&[0x02, 0x00]);
+        // call
+        self.write_opcode(Opcode::CallIndirect);
+        self.write_slice(&unsigned_leb128(map_fn_type_idx));
         self.write_byte(0x00); // table index
     }
 }
