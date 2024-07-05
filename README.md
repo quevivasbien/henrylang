@@ -2,6 +2,24 @@
 
 `henry` is a language designed for lobsters.
 
+## How to run
+
+Using cargo:
+
+* For an interactive interpreter session:
+
+    ```
+    cargo run
+    ```
+
+* To run a script:
+
+    ```
+    cargo run script.hl
+    ```
+
+(Or use `cargo build` or `cargo install`, then run the resulting binary.)
+
 ## Features
 
 - All variables are immutable.
@@ -13,7 +31,20 @@
 
 ## In-progress
 
-- Compilation to WASM (currently supports math, non-capturing functions, custom types, and all basic data types except iterators)
+### Compilation to WASM
+
+Enable with the `--wasm` flag. For example, if building & running with cargo, the command
+```
+cargo run script.hl -- --wasm
+```
+will run the script `script.hl` by compiling it to WASM, then executing the compiled web assembly using the Wasmer runtime. 
+
+At this point, most of the current language features are implemented for the WASM compiler. The following features are still in-progress:
+
+* Capturing functions
+* Recursion
+* Some built-in functions
+* Garbage collection
 
 ## Usage examples
 

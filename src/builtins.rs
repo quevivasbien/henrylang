@@ -28,8 +28,8 @@ lazy_static! {
         heap_arity: 0,
         return_is_heap: false,
         function: |vm, _args, _heap_args| {
-            let now = UNIX_EPOCH.elapsed().unwrap().as_micros();
-            vm.stack.push(Value { i: now as i64 });
+            let now = UNIX_EPOCH.elapsed().unwrap().as_secs_f64();
+            vm.stack.push(Value { f: now });
             Ok(())
         }
     };
@@ -184,7 +184,7 @@ lazy_static! {
 pub fn builtin_types() -> FxHashMap<String, Type> {
     let mut map = FxHashMap::default();
     map.insert("print[Str]".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
-    map.insert("time".to_string(), Type::Func(vec![], Box::new(Type::Int)));
+    map.insert("time".to_string(), Type::Func(vec![], Box::new(Type::Float)));
     map.insert("float[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
     map.insert("int[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
 

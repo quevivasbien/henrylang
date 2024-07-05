@@ -13,11 +13,22 @@ fn print<T: std::fmt::Display>(x: T) -> T {
     x
 }
 
+fn powi(x: i32, y: i32) -> i32 {
+    x.pow(y as u32)
+}
+
+fn powf(x: f32, y: f32) -> f32 {
+    x.powf(y)
+}
+
 pub fn get_wasmer_imports(store: &mut wasmer::Store) -> wasmer::Imports {
     wasmer::imports! {
         "env" => {
             "print[Int]" => wasmer::Function::new_typed(store, print::<i32>),
             "print[Float]" => wasmer::Function::new_typed(store, print::<f32>),
+
+            "pow[Int, Int]" => wasmer::Function::new_typed(store, powi),
+            "pow[Float, Float]" => wasmer::Function::new_typed(store, powf),
         }
     }
 }
@@ -47,15 +58,51 @@ impl Default for Env {
         let mut global_vars = FxHashMap::default();
         global_vars.insert("print[Int]".to_string(), 0);
         global_vars.insert("print[Float]".to_string(), 1);
+        global_vars.insert("pow[Int, Int]".to_string(), 2);
+        global_vars.insert("pow[Float, Float]".to_string(), 3);
         let global_scope = Rc::new(RefCell::new(global_vars));
 
         let mut global_types = FxHashMap::default();
+        // add types for imports
         global_types.insert(
             "print[Int]".to_string(),
             Type::Func(vec![Type::Int], Box::new(Type::Int)),
         );
         global_types.insert(
             "print[Float]".to_string(),
+            Type::Func(vec![Type::Float], Box::new(Type::Float)),
+        );
+        global_types.insert(
+            "pow[Int, Int]".to_string(),
+            Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "pow[Float, Float]".to_string(),
+            Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)),
+        );
+        // add type for callable builtins
+        global_types.insert(
+            "abs[Int]".to_string(),
+            Type::Func(vec![Type::Int], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "abs[Float]".to_string(),
+            Type::Func(vec![Type::Float], Box::new(Type::Float)),
+        );
+        global_types.insert(
+            "int[Float]".to_string(),
+            Type::Func(vec![Type::Float], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "float[Int]".to_string(),
+            Type::Func(vec![Type::Int], Box::new(Type::Float)),
+        );
+        global_types.insert(
+            "mod[Int, Int]".to_string(),
+            Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "sqrt[Float]".to_string(),
             Type::Func(vec![Type::Float], Box::new(Type::Float)),
         );
         let global_types = Rc::new(RefCell::new(global_types));
@@ -76,6 +123,16 @@ impl Env {
                 "env",
                 "print[Float]",
                 FuncTypeSignature::new(vec![Numtype::F32], Some(Numtype::F32)),
+            ),
+            Import::new(
+                "env",
+                "pow[Int, Int]",
+                FuncTypeSignature::new(vec![Numtype::I32, Numtype::I32], Some(Numtype::I32)),
+            ),
+            Import::new(
+                "env",
+                "pow[Float, Float]",
+                FuncTypeSignature::new(vec![Numtype::F32, Numtype::F32], Some(Numtype::F32)),
             ),
         ];
         Self {

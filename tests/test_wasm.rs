@@ -195,3 +195,15 @@ fn test_zipmap() {
         "[Henry is cool, Lenry is not cool]"
     );
 }
+
+#[test]
+fn test_callable_builtins() {
+    assert_eq!(run("abs(1) = abs(-1) and abs(-1) = 1"), "true");
+    assert_eq!(run("abs(1.0) = abs(-1.0) and abs(-1.0) = 1.0"), "true");
+    assert_eq!(run("float(1)"), "1.0");
+    assert_eq!(run("int(1.2)"), "1");
+    assert_eq!(run("int(-1.2)"), "-1");
+    assert_eq!(run("sqrt(4.0)"), "2.0");
+    assert_eq!(run("mod(5, 3)"), "2");
+    assert_eq!(run("mod(-5, 3)"), "1");
+}

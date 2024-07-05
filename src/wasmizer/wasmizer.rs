@@ -1269,16 +1269,131 @@ impl Wasmizer {
             self.bytes_mut().append(&mut unsigned_leb128(idx));
             return Ok(0);
         }
-        // finally, look in global scope
+        // look in global scope
         let maybe_value = {
             let globals = self.global_vars.borrow();
             globals.get(&name).cloned()
         };
         if let Some(value) = maybe_value {
-            self.bytes_mut().append(&mut unsigned_leb128(value as u32));
+            self.write_opcode(Opcode::I32Const);
+            self.write_slice(&unsigned_leb128(value as u32));
             return Ok(1); // 1 denotes found variable is global
         }
-        Err(format!("variable {} not found", name))
+        // finally, see if this is one of the dynamically defined special functions
+        let idx = self.get_callable_builtin(&name)?;
+        self.write_opcode(Opcode::I32Const);
+        self.write_slice(&unsigned_leb128(idx));
+        Ok(1)
+    }
+
+    fn get_callable_builtin(&mut self, name: &str) -> Result<u32, String> {
+        // check if function is already defined as a builtin
+        let special_name = format!("<callable>{}", name);
+        if let Some(idx) = self.builtins.get(&special_name) {
+            return Ok(*idx);
+        }
+        // see if there is a definition available
+        let func = match name {
+            "abs[Int]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::I32)),
+                    vec!["x".to_string()]
+                );
+                func.add_local("mask", Numtype::I32);
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                // there is no I32Abs opcode. Instead we'll calculate mask = x >> 31, then (x ^ mask) - mask
+                func.write_opcode(Opcode::I32Const);
+                func.write_byte(31);
+                func.write_opcode(Opcode::I32ShrS);
+                func.write_opcode(Opcode::LocalTee);
+                func.write_var("mask");
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::I32Xor);
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("mask");
+                func.write_opcode(Opcode::I32Sub);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            "abs[Float]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::F32], Some(Numtype::F32)),
+                    vec!["x".to_string()]
+                );
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::F32Abs);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            "float[Int]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::I32], Some(Numtype::F32)),
+                    vec!["x".to_string()]
+                );
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::F32ConvertI32S);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            "int[Float]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::F32], Some(Numtype::I32)),
+                    vec!["x".to_string()]
+                );
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::I32TruncF32S);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            "sqrt[Float]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::F32], Some(Numtype::F32)),
+                    vec!["x".to_string()]
+                );
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::F32Sqrt);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            "mod[Int, Int]" => {
+                let mut func = BuiltinFunc::new(
+                    FuncTypeSignature::new(vec![Numtype::I32, Numtype::I32], Some(Numtype::I32)),
+                    vec!["x".to_string(), "y".to_string()]
+                );
+                // Do a few extra steps, since we want the answer to always be positive
+                // mod(x, y) = ((x % y) + y) % y
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("x");
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("y");
+                func.write_opcode(Opcode::I32RemS);
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("y");
+                func.write_opcode(Opcode::I32Add);
+                func.write_opcode(Opcode::LocalGet);
+                func.write_var("y");
+                func.write_opcode(Opcode::I32RemS);
+                func.write_opcode(Opcode::End);
+
+                func
+            }
+            _ => return Err(format!("variable {} not found", name))
+        };
+        let fn_idx = self.builder.add_builtin(&func)?;
+        self.builtins.insert(special_name, fn_idx);
+        
+        Ok(fn_idx)
     }
 
     pub fn call_indirect(&mut self, typ: &ast::Type) -> Result<(), String> {
@@ -1291,10 +1406,8 @@ impl Wasmizer {
         Ok(())
     }
     pub fn call(&mut self) -> Result<(), String> {
-        let fn_idx = match self.bytes_mut().pop() {
-            Some(idx) => idx,
-            None => return Err("Call called on empty stack".to_string()),
-        };
+        let fn_idx = self.bytes_mut().pop().expect("No values left in bytes when attempting to pop Value for direct function call");
+        self.bytes_mut().pop().expect("No values left in bytes when attempting to pop I32Const Opcode");
         self.write_opcode(Opcode::Call);
         self.write_byte(fn_idx);
         Ok(())
