@@ -107,14 +107,36 @@ fn test_closure() {
     assert_eq!(result, 14);
 
     let source = "
+    func := |x: Int| { x + 2 }
+    gunc := |x: Int| { x + 1 }
+    g := |s: Str, func: Func(Int, Int)| { func(len(s)) }
+
+    g(\"hello\", gunc[Int])
+    ";
+    
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 6);
+
+    let source = "
+    g := |s: Str, func: Func(Int, Int)| { func(len(s)) }
     f := |x: Int| { x + 1 }
-    g := |s: Str, f: Func(Int, Int)| { f(len(s)) }
 
     g(\"hello\", f[Int])
     ";
 
     let result = run_expect_value!(source, Int);
     assert_eq!(result, 6);
+
+    let source = "
+    func_sum := |f: Func(Int, Int), g: Func(Int, Int), x: Int| {
+        f(x) + g(x)
+    }
+    
+    func_sum(|x: Int|{ x + 1 }, |x: Int|{ x + 2 }, 1)
+    ";
+
+    let result = run_expect_value!(source, Int);
+    assert_eq!(result, 5);
 }
 
 #[test]

@@ -24,6 +24,5 @@ name = "benchmark"
 harness = false
 
 [features]
-default = ["wasm"]
 debug = []
-wasm = []
+wasm_repl = []
