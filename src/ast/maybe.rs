@@ -64,8 +64,67 @@ impl Expression for Maybe {
             },
         }
     }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        match &self.value {
+            MaybeValue::Some(e) => {
+                e.wasmize(wasmizer)?;
+                wasmizer.write_some(&e.get_type()?)?;
+            },
+            MaybeValue::Null(t) => {
+                wasmizer.write_null(&t.get_type()?)?;
+            },
+        }
+        Ok(0)
+    }
 }
 
+#[derive(Debug)]
+pub struct IsSome {
+    value: Box<dyn Expression>,
+    parent: Option<*const dyn Expression>,
+}
+
+impl IsSome {
+    pub fn new(value: Box<dyn Expression>) -> Self {
+        Self { value, parent: None }
+    }
+}
+
+impl Expression for IsSome {
+    fn get_type(&self) -> Result<Type, String> {
+        Ok(Type::Bool)
+    }
+    fn set_parent(&mut self, parent: Option<*const dyn Expression>) -> Result<(), String> {
+        self.parent = parent;
+        let self_ptr = self as *const dyn Expression;
+        self.value.set_parent(Some(self_ptr))
+    }
+    fn get_parent(&self) -> Option<*const dyn Expression> {
+        self.parent
+    }
+
+    fn compile(&self, compiler: &mut Compiler) -> Result<(), String> {
+        // check that value is a Maybe
+        if !matches!(self.value.get_type()?, Type::Maybe(_)) {
+            return Err(format!("IsSome expected Maybe type, got {:?}", self.value.get_type()?));
+        }
+        self.value.compile(compiler)?;
+        compiler.write_opcode(OpCode::IsSome);
+        Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        // check that value is a Maybe, and get inner type
+        let inner_type = match self.value.get_type()? {
+            Type::Maybe(t) => *t,
+            x => return Err(format!("IsSome expected Maybe type, got {:?}", x))
+        };
+        self.value.wasmize(wasmizer)?;
+        wasmizer.write_is_some(&inner_type)?;
+        Ok(0)
+    }
+}
 
 #[derive(Debug)]
 pub struct Unwrap {
@@ -114,5 +173,13 @@ impl Expression for Unwrap {
             compiler.write_opcode(OpCode::Unwrap);
         }
         Ok(())
+    }
+
+    fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
+        self.value.wasmize(wasmizer)?;
+        self.default.wasmize(wasmizer)?;
+        wasmizer.write_unwrap(&self.get_type()?)?;
+        
+        Ok(0)
     }
 }   

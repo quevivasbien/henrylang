@@ -30,14 +30,15 @@ impl Numtype {
             ast::Type::Int => Ok(Self::I32),
             ast::Type::Bool => Ok(Self::I32),
             ast::Type::Float => Ok(Self::F32),
-            ast::Type::Func(..) => Ok(Self::I32),  // functions are referred to by their table indices
-            ast::Type::TypeDef(..) => Ok(Self::I32),  // TypeDef returns a constructor function
+            ast::Type::Func(..) => Ok(Self::I32), // functions are referred to by their table indices
+            ast::Type::TypeDef(..) => Ok(Self::I32), // TypeDef returns a constructor function
             // Heap types are referred to by a fat pointer containing memory loc and length
             ast::Type::Arr(_) => Ok(Self::I64),
             ast::Type::Str => Ok(Self::I64),
             ast::Type::Iter(_) => Ok(Self::I64),
             ast::Type::Object(..) => Ok(Self::I64),
-            _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
+            ast::Type::Maybe(_) => Ok(Self::I64),
+            // _ => Err(format!("Cannot convert type {:?} to WASM Numtype", typ)),
         }
     }
 
@@ -47,6 +48,44 @@ impl Numtype {
             Self::Void => 0,
             Self::F32 | Self::I32 => 4,
             Self::I64 => 8,
+        }
+    }
+
+    pub fn const_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Const,
+            Self::I32 => Opcode::I32Const,
+            Self::I64 => Opcode::I64Const,
+            Self::Void => panic!("Cannot create const of void type"),
+        }
+    }
+
+    pub fn load_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Load,
+            Self::I32 => Opcode::I32Load,
+            Self::I64 => Opcode::I64Load,
+            Self::Void => panic!("Cannot load void type"),
+        }
+    }
+
+    pub fn store_op(&self) -> Opcode {
+        match self {
+            Self::F32 => Opcode::F32Store,
+            Self::I32 => Opcode::I32Store,
+            Self::I64 => Opcode::I64Store,
+            Self::Void => panic!("Cannot store void type"),
+        }
+    }
+}
+
+impl std::fmt::Display for Numtype {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Void => write!(f, "Void"),
+            Self::F32 => write!(f, "F32"),
+            Self::I32 => write!(f, "I32"),
+            Self::I64 => write!(f, "I64"),
         }
     }
 }
@@ -64,7 +103,9 @@ pub enum Opcode {
     If = 0x04,
     Else = 0x05,
     End = 0x0b,
+    Br = 0x0c,
     BrIf = 0x0d,
+    Return = 0x0f,
     Call = 0x10,
     CallIndirect = 0x11,
     Drop = 0x1a,
@@ -76,9 +117,12 @@ pub enum Opcode {
     I32Load = 0x28,
     I64Load = 0x29,
     F32Load = 0x2a,
+    I32Load8U = 0x2d,
     I32Store = 0x36,
     I64Store = 0x37,
     F32Store = 0x38,
+    MemorySize = 0x3f,
+    MemoryGrow = 0x40,
     I32Const = 0x41,
     I64Const = 0x42,
     F32Const = 0x43,
@@ -88,9 +132,9 @@ pub enum Opcode {
     I32LtS = 0x48,
     I32LtU = 0x49,
     I32GtS = 0x4a,
-    // I32GtU = 0x4b,
+    I32GtU = 0x4b,
     I32LeS = 0x4c,
-    // I32LeU = 0x4d,
+    I32LeU = 0x4d,
     I32GeS = 0x4e,
     I32GeU = 0x4f,
     F32Eq = 0x5b,
@@ -103,9 +147,11 @@ pub enum Opcode {
     I32Sub = 0x6b,
     I32Mul = 0x6c,
     I32DivS = 0x6d,
+    I32DivU = 0x6e,
     I32RemU = 0x70,
     I32And = 0x71,
     I32Or = 0x72,
+    I32ShrU = 0x76,
     I64Add = 0x7c,
     F32Neg = 0x8c,
     I64Shl = 0x86,
@@ -120,7 +166,6 @@ pub enum Opcode {
 
 pub const MEMINIT: [u8; 2] = [0xfc, 0x08];
 pub const MEMCOPY: [u8; 4] = [0xfc, 0x0a, 0x00, 0x00];
-
 
 pub fn unsigned_leb128(value: u32) -> Vec<u8> {
     let mut result = Vec::new();
@@ -174,10 +219,7 @@ pub fn vector(mut data: Vec<u8>) -> Vec<u8> {
 
 pub fn section_from_chunks(section_type: SectionType, chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut result = vec![section_type as u8];
-    let data = [
-        unsigned_leb128(chunks.len() as u32),
-        chunks.concat()
-    ].concat();
+    let data = [unsigned_leb128(chunks.len() as u32), chunks.concat()].concat();
     result.append(&mut vector(data));
     result
 }
@@ -204,23 +246,25 @@ fn function_type(args: Vec<u8>, ret: Vec<u8>) -> Vec<u8> {
 pub fn function_body(local_types: Vec<u8>, mut code: Vec<u8>) -> Vec<u8> {
     let mut result = unsigned_leb128(local_types.len() as u32);
     for ltype in local_types {
-        result.push(0x01);  // count of locals with this type
+        result.push(0x01); // count of locals with this type
         result.push(ltype);
     }
     result.append(&mut code);
     vector(result)
 }
 
-
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct FuncTypeSignature {
     pub args: Vec<Numtype>,
-    pub ret: Option<Numtype>, 
+    pub ret: Option<Numtype>,
 }
 
 impl Default for FuncTypeSignature {
     fn default() -> Self {
-        Self { args: vec![], ret: None }
+        Self {
+            args: vec![],
+            ret: None,
+        }
     }
 }
 
@@ -231,11 +275,17 @@ impl FuncTypeSignature {
     pub fn from_ast_type(typ: &ast::Type) -> Result<Self, String> {
         let (args, ret) = match typ {
             ast::Type::Func(args, ret) | ast::Type::TypeDef(args, ret) => (args, ret),
-            _ => return Err(format!("Cannot convert type {:?} to WASM FuncTypeSignature", typ)),
+            _ => {
+                return Err(format!(
+                    "Cannot convert type {:?} to WASM FuncTypeSignature",
+                    typ
+                ))
+            }
         };
-        let args = args.iter().map(
-            |x| Numtype::from_ast_type(x)
-        ).collect::<Result<_, _>>()?;
+        let args = args
+            .iter()
+            .map(|x| Numtype::from_ast_type(x))
+            .collect::<Result<_, _>>()?;
         let ret = Numtype::from_ast_type(ret)?;
         Ok(Self::new(args, Some(ret)))
     }
@@ -245,9 +295,6 @@ impl FuncTypeSignature {
             Some(x) => vec![x as u8],
             None => vec![],
         };
-        function_type(
-            self.args.iter().map(|x| *x as u8).collect(),
-            ret
-        )
+        function_type(self.args.iter().map(|x| *x as u8).collect(), ret)
     }
 }

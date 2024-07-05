@@ -14,7 +14,11 @@ struct Export {
 
 impl Export {
     fn new(name: String, idx: u32, export_type: ExportType) -> Self {
-        Self { name, idx, export_type }
+        Self {
+            name,
+            idx,
+            export_type,
+        }
     }
 
     fn as_export(&self) -> Vec<u8> {
@@ -36,7 +40,7 @@ impl DataSegment {
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let mut result = vec![0x01];  // 0x01 is flag for passive segment
+        let mut result = vec![0x01]; // 0x01 is flag for passive segment
         result.append(&mut unsigned_leb128(self.data.len() as u32));
         result.extend_from_slice(&self.data);
 
@@ -75,7 +79,13 @@ impl Default for ModuleBuilder {
 
 impl ModuleBuilder {
     // adds a function definition, returns the function index
-    pub fn add_function(&mut self, sig: &FuncTypeSignature, local_types: Vec<u8>, code: Vec<u8>, export_name: Option<String>) -> Result<u32, String> {
+    pub fn add_function(
+        &mut self,
+        sig: &FuncTypeSignature,
+        local_types: Vec<u8>,
+        code: Vec<u8>,
+        export_name: Option<String>,
+    ) -> Result<u32, String> {
         let ftype = self.get_functype_idx(sig);
         let func_idx = (self.imports.len() + self.funcs.len()) as u32;
         if func_idx == u32::MAX {
@@ -84,7 +94,8 @@ impl ModuleBuilder {
         self.funcs.push(ftype);
         self.func_bodies.push(function_body(local_types, code));
         if let Some(name) = export_name {
-            self.exports.push(Export::new(name, func_idx, ExportType::Func));
+            self.exports
+                .push(Export::new(name, func_idx, ExportType::Func));
         }
         Ok(func_idx)
     }
@@ -93,9 +104,13 @@ impl ModuleBuilder {
         // first check if there is already a matching data segment
         // if so, return its index
         // if not, add it and return its index
-        match self.data_segments.iter().enumerate()
-            .find_map(|(i, x)| if x.data == data { Some(i) } else { None })
-        {
+        match self.data_segments.iter().enumerate().find_map(|(i, x)| {
+            if x.data == data {
+                Some(i)
+            } else {
+                None
+            }
+        }) {
             Some(i) => Ok(i as u32),
             None => {
                 let idx = self.data_segments.len() as u32;
@@ -112,12 +127,7 @@ impl ModuleBuilder {
         let module = encode_string(import.module);
         let field = encode_string(import.field);
         let ftype = unsigned_leb128(self.get_functype_idx(&import.sig));
-        let bytes = [
-            module,
-            field,
-            vec![0x00],
-            ftype,
-        ].concat();
+        let bytes = [module, field, vec![0x00], ftype].concat();
         self.imports.push(bytes);
         self.imports.len() as u32 - 1
     }
@@ -127,12 +137,15 @@ impl ModuleBuilder {
             func.get_signature(),
             func.get_local_types(),
             func.get_bytes().to_vec(),
-            None
+            None,
         )
     }
 
     pub fn get_functype_idx(&mut self, ftype: &FuncTypeSignature) -> u32 {
-        match self.functypes.iter().enumerate()
+        match self
+            .functypes
+            .iter()
+            .enumerate()
             .find_map(|(i, x)| if x == ftype { Some(i) } else { None })
         {
             Some(i) => i as u32,
@@ -146,10 +159,11 @@ impl ModuleBuilder {
     fn type_section(&self) -> Vec<u8> {
         section_from_chunks(
             SectionType::Type,
-            self.functypes.iter()
+            self.functypes
+                .iter()
                 .map(|x| x.as_functype())
                 .collect::<Vec<_>>()
-                .as_slice()
+                .as_slice(),
         )
     }
 
@@ -163,20 +177,23 @@ impl ModuleBuilder {
 
     fn table_section(&self) -> Vec<u8> {
         let n_funcs = self.funcs.len() as u8;
-        section_from_chunks(SectionType::Table, &[vec![
-            0x70,    // funcref
-            0x00,    // minimum
-            n_funcs  // maximum
-        ]])
+        section_from_chunks(
+            SectionType::Table,
+            &[vec![
+                0x70,    // funcref
+                0x00,    // minimum
+                n_funcs, // maximum
+            ]],
+        )
     }
 
     fn memory_section(&self) -> Vec<u8> {
         section_from_chunks(
             SectionType::Memory,
             &[vec![
-                0x00,  // limit flag
-                0x01,  // initial size
-            ]]
+                0x00, // limit flag
+                0x01, // initial size
+            ]],
         )
     }
 
@@ -186,45 +203,47 @@ impl ModuleBuilder {
             &[
                 // global 0 is memptr
                 vec![
-                    Numtype::I32 as u8,  // data type
-                    0x01,  // mutability (1 means mutable)
+                    Numtype::I32 as u8, // data type
+                    0x01,               // mutability (1 means mutable)
                     Opcode::I32Const as u8,
-                    0x00,  // initial value
+                    0x00, // initial value
                     Opcode::End as u8,
                 ],
                 // global 1 is memsize
                 vec![
-                    Numtype::I32 as u8,  // data type
-                    0x01,  // mutability (1 means mutable)
+                    Numtype::I32 as u8, // data type
+                    0x01,               // mutability (1 means mutable)
                     Opcode::I32Const as u8,
-                    0x01,  // initial value
+                    0x01, // initial value
                     Opcode::End as u8,
                 ],
-            ]
+            ],
         )
     }
 
     fn export_section(&self) -> Vec<u8> {
         section_from_chunks(
             SectionType::Export,
-            self.exports.iter()
+            self.exports
+                .iter()
                 .map(|x| x.as_export())
                 .collect::<Vec<_>>()
-                .as_slice()
+                .as_slice(),
         )
     }
 
     fn elem_section(&self) -> Vec<u8> {
-        let segments = (0..self.funcs.len()).map(
-            |i| {
+        let segments = (0..self.funcs.len())
+            .map(|i| {
                 [
                     &[0x00, Opcode::I32Const as u8],
                     unsigned_leb128(i as u32).as_slice(),
                     &[Opcode::End as u8, 0x01],
-                    unsigned_leb128((i + self.imports.len()) as u32).as_slice()
-                ].concat()
-            }
-        ).collect::<Vec<_>>();
+                    unsigned_leb128((i + self.imports.len()) as u32).as_slice(),
+                ]
+                .concat()
+            })
+            .collect::<Vec<_>>();
         section_from_chunks(SectionType::Element, &segments)
     }
 
@@ -233,13 +252,19 @@ impl ModuleBuilder {
     }
 
     fn data_section(&self) -> Vec<u8> {
-        let data_chunks = self.data_segments.iter().map(|d| d.to_bytes()).collect::<Vec<_>>();
+        let data_chunks = self
+            .data_segments
+            .iter()
+            .map(|d| d.to_bytes())
+            .collect::<Vec<_>>();
         section_from_chunks(SectionType::Data, &data_chunks)
     }
 
     fn data_count_section(&self) -> Vec<u8> {
         let mut bytes = vec![SectionType::DataCount as u8];
-        bytes.append(&mut vector(unsigned_leb128(self.data_segments.len() as u32)));
+        bytes.append(&mut vector(
+            unsigned_leb128(self.data_segments.len() as u32),
+        ));
         bytes
     }
 
@@ -255,9 +280,10 @@ impl ModuleBuilder {
             self.global_section().as_slice(),
             self.export_section().as_slice(),
             self.elem_section().as_slice(),
-            self.data_count_section().as_slice(),  // this needs to come before the code section even though SectionType::DataCount  > SectionType::Code
+            self.data_count_section().as_slice(), // this needs to come before the code section even though SectionType::DataCount  > SectionType::Code
             self.code_section().as_slice(),
             self.data_section().as_slice(),
-        ].concat()
+        ]
+        .concat()
     }
 }

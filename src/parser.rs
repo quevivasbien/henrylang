@@ -198,10 +198,6 @@ lazy_static! {
         );
 
         map.insert(
-            TokenType::Some,
-            ParseRule::new(Some(Parser::some), None, Precedence::None),
-        );
-        map.insert(
             TokenType::Reduce,
             ParseRule::new(Some(Parser::reduce), None, Precedence::None),
         );
@@ -216,6 +212,14 @@ lazy_static! {
         map.insert(
             TokenType::ZipMap,
             ParseRule::new(Some(Parser::zipmap), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::Some,
+            ParseRule::new(Some(Parser::some), None, Precedence::None),
+        );
+        map.insert(
+            TokenType::IsSome,
+            ParseRule::new(Some(Parser::is_some), None, Precedence::None),
         );
         map.insert(
             TokenType::Unwrap,
@@ -744,6 +748,21 @@ impl Parser {
         };
         self.consume(TokenType::RParen, "Expected ')' after 'some' argument.".to_string());
         Box::new(ast::Maybe::new_some(expr))
+    }
+
+    fn is_some(&mut self) -> Box<dyn ast::Expression> {
+        self.consume(TokenType::LParen, "Expected '(' after 'is_some'.".to_string());
+        let expr = match self.expression() {
+            Some(expr) => expr,
+            None => {
+                self.error(Some(
+                    format!("Expected expression as argument in 'is_some' expression.")
+                ));
+                return Box::new(ast::ErrorExpression{});
+            }
+        };
+        self.consume(TokenType::RParen, "Expected ')' after 'is_some' argument.".to_string());
+        Box::new(ast::IsSome::new(expr))
     }
 
     fn map(&mut self, left: Box<dyn ast::Expression>) -> Box<dyn ast::Expression> {

@@ -693,6 +693,17 @@ impl VM {
                     let value = self.heap_stack.pop().expect("Attempted to wrap with empty stack");
                     self.heap_stack.push(HeapValue::MaybeHeap(Some(Box::new(value))));
                 },
+                OpCode::IsSome => {
+                    let value = self.heap_stack.pop().expect("Attempted to unwrap with empty stack");
+                    let is_some = match value {
+                        HeapValue::Maybe(Some(_)) => true,
+                        HeapValue::Maybe(None) => false,
+                        HeapValue::MaybeHeap(Some(_)) => true,
+                        HeapValue::MaybeHeap(None) => false,
+                        _ => unreachable!(),
+                    };
+                    self.stack.push(Value::from_bool(is_some));
+                }
                 OpCode::Unwrap => {
                     let value = self.heap_stack.pop().expect("Attempted to unwrap with empty stack");
                     match value {
@@ -721,7 +732,9 @@ impl VM {
                     let len = match value {
                         HeapValue::Array(a) => a.len(),
                         HeapValue::ArrayHeap(a) => a.len(),
-                        HeapValue::String(s) => s.len(),
+                        HeapValue::String(s) => s.chars().count(),
+                        HeapValue::LazyIter(iter) => iter.count(),
+                        HeapValue::LazyIterHeap(iter) => iter.count(),
                         _ => unreachable!(),
                     };
                     self.stack.push(Value { i: len as i64 });

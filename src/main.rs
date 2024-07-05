@@ -21,7 +21,7 @@ fn repl() {
     let _ = rl.load_history(HISTORY_FILE);
     rl.bind_sequence(
         rustyline::KeyEvent::new('\t', rustyline::Modifiers::NONE),
-        rustyline::Cmd::HistorySearchForward
+        rustyline::Cmd::HistorySearchForward,
     );
     println!("{}", TITLE);
     #[cfg(not(feature = "wasm_repl"))]
@@ -43,17 +43,17 @@ fn repl() {
                 match wasmize(&line, Env::default()) {
                     Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
                         Ok(x) => println!("{}", x),
-                        Err(e) => println!("Runtime Error: {}", e)
+                        Err(e) => println!("Runtime Error: {}", e),
                     },
                     Err(e) => println!("Compile Error: {}", e),
                 }
-            },
+            }
             Err(ReadlineError::Interrupted) => {
                 println!("Cancelled");
-            },
+            }
             Err(ReadlineError::Eof) => {
                 break;
-            },
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
                 break;
@@ -91,9 +91,10 @@ fn run_file(path: &str, as_wasm: bool) {
 }
 
 fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
+    let args = std::env::args().filter(|x| !x.starts_with("-")).collect::<Vec<_>>();
+    let flags = std::env::args().filter(|x| x.starts_with("-")).collect::<Vec<_>>();
 
-    let use_wasm = args.iter().any(|x| x == "--wasm");
+    let use_wasm = flags.iter().any(|x| x == "--wasm");
     if use_wasm {
         println!("Note: wasm mode is experimental and will not apply in the REPL unless compiled with wasm_repl feature enabled");
     }

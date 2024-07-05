@@ -87,6 +87,7 @@ pub enum OpCode {
     // Maybe ops
     WrapSome,
     WrapHeapSome,
+    IsSome,
     Unwrap,
     UnwrapHeap,
 

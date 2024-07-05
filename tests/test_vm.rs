@@ -209,6 +209,11 @@ fn test_maybe() {
 
     let result = run_expect_value!(source, Int);
     assert_eq!(result, 10);
+
+    assert!(run_expect_value!("issome(some(1))", Bool));
+    assert!(run_expect_value!("!issome({}: Int)", Bool));
+    assert!(run_expect_value!("issome(some(\"Henry\"))", Bool));
+    assert!(run_expect_value!("!issome({}: Str)", Bool));
 }
 
 #[test]
@@ -269,4 +274,16 @@ fn test_zipmap() {
     ";
     let result = run_expect_value!(source, Bool);
     assert!(result);
+}
+
+#[test]
+fn test_len() {
+    assert_eq!(run_expect_value!("len(\"hello\")", Int), 5);
+    assert_eq!(run_expect_value!("len(\"Ο Χένρι είναι ο πιο κουλ\")", Int), 24);
+    assert_eq!(run_expect_value!("len(\"😀\")", Int), 1);
+    assert_eq!(run_expect_value!("len([1, 2, 3])", Int), 3);
+    assert_eq!(run_expect_value!("len([\"hello\", \"there\"])", Int), 2);
+    assert_eq!(run_expect_value!("len(0 to 5)", Int), 6);
+    assert_eq!(run_expect_value!("len([]: Int)", Int), 0);
+    assert_eq!(run_expect_value!("len(|x:Int|{x} -> []:Int)", Int), 0);
 }

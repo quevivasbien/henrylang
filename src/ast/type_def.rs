@@ -67,7 +67,7 @@ impl Expression for TypeDef {
     }
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
-        let struct_def = Struct::new(self.field_types()?);
+        let struct_def = Struct::from_ast_types(self.field_types()?);
         wasmizer.create_struct(self.name.clone(), struct_def, true)?;
         Ok(0)
     }
