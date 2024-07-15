@@ -68,6 +68,13 @@ fn test_functions() {
 }
 
 #[test]
+fn test_closures() {
+    assert_eq!(run("x := 2 f := |y: Int|{x+y+x} f(1)"), "5");
+    assert_eq!(run("x := 2 f := |y: Int|{g := |z: Int|{x+z} g(y)} f(1)"), "3");
+    assert_eq!(run("x := 2 f := |y: Int|{g := |z: Int|{x+y+z} g(y)} f(1)"), "4");
+}
+
+#[test]
 fn test_objects() {
     assert_eq!(
         run("MyType := type { c: Bool, a:Int b: Float } MyType(true, 152, 16.2)"),
@@ -206,4 +213,29 @@ fn test_callable_builtins() {
     assert_eq!(run("sqrt(4.0)"), "2.0");
     assert_eq!(run("mod(5, 3)"), "2");
     assert_eq!(run("mod(-5, 3)"), "1");
+}
+
+#[test]
+fn test_primes() {
+    let result = run("
+    all := |iter: Iter(Bool)| {
+        reduce(|acc: Bool, x: Bool| { acc and x }, iter, true)
+    }
+
+    is_prime := |n: Int| {
+        if n = 2 { true }
+        else {
+            sqrt_n := int(sqrt(float(n))) + 1
+            all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
+        }
+    }
+
+    sum := |iter: Iter(Int)| {
+        reduce(|acc: Int, x: Int| { acc + x }, iter, 0)
+    }
+
+    sum(filter(is_prime, 2 to 100))
+    ");
+
+    assert_eq!(result, "1060");
 }

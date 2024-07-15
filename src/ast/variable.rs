@@ -63,6 +63,6 @@ impl Expression for Variable {
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let name = self.get_expanded_name()?;
-        wasmizer.get_variable(name)
+        wasmizer.get_variable(name, &self.get_type()?)
     }
 }

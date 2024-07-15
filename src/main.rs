@@ -12,7 +12,7 @@ oooo
  888   888  888    .o  888   888   888        `888'    
 o888o o888o `Y8bod8P' o888o o888o d888b        .8'     
                                            .o..P'      
-            [ henrylang v0.4.1 ]           `Y8P'       
+            [ henrylang v0.4.2 ]           `Y8P'       
 "#;
 
 #[allow(unused_variables)]

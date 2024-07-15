@@ -1,15 +1,21 @@
 use rustc_hash::FxHashMap;
 
-use super::module_builder::ModuleBuilder;
+use super::module_builder::{Global, ModuleBuilder};
 use super::{builtin_funcs, structs::Struct, wasmtypes::*};
 use crate::env;
 use crate::{ast, compiler::TypeContext, parser, scanner};
 
 #[derive(Debug)]
 struct Local {
+    // The local variable's name
     name: String,
+    // The scope depth at which the local variable was declared
     depth: i32,
+    // The index within the function's local data
     index: u32,
+    // Whether or not a global variable is set to copy the value of this variable (for use as an upvalue);
+    // if so, the index of the global variable that shadows it
+    global_shadow: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -39,6 +45,7 @@ impl LocalData {
             name,
             depth: self.scope_depth,
             index,
+            global_shadow: None,
         });
         self.types.push(typ);
         index
@@ -54,10 +61,24 @@ impl LocalData {
     }
 }
 
+struct Param {
+    name: String,
+    global_shadow: Option<u32>,
+}
+
+impl Param {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            global_shadow: None,
+        }
+    }
+}
+
 struct WasmFunc {
     name: String,
     signature: FuncTypeSignature,
-    param_names: Vec<String>,
+    params: Vec<Param>,
     locals: LocalData,
     bytes: Vec<u8>,
     export: bool,
@@ -68,7 +89,7 @@ impl WasmFunc {
         Self {
             name,
             signature,
-            param_names: vec![],
+            params: vec![],
             locals: Default::default(),
             bytes: vec![],
             export,
@@ -78,13 +99,37 @@ impl WasmFunc {
         self.signature.args.len() as u32
     }
     fn get_param_idx(&self, name: &str) -> Option<u32> {
-        self.param_names
+        self.params
             .iter()
-            .position(|x| x == name)
+            .position(|x| x.name == name)
             .map(|x| x as u32)
     }
     fn get_local_idx(&self, name: &str) -> Option<u32> {
         self.locals.get_idx(name).map(|x| x + self.n_params())
+    }
+
+    fn get_idx_and_global_shadow(&self, name: &str) -> Option<(u32, Option<u32>)> {
+        if let Some(local_idx) = self.get_local_idx(name) {
+            return Some((local_idx, self.locals.locals[local_idx as usize].global_shadow));
+        }
+        if let Some(param_idx) = self.get_param_idx(name) {
+            return Some((param_idx, self.params[param_idx as usize].global_shadow));
+        }
+        None
+    }
+    fn add_global_shadow(&mut self, name: &str, global_idx: u32) {
+        for local in self.locals.locals.iter_mut().rev() {
+            if local.name == name {
+                local.global_shadow = Some(global_idx);
+                return;
+            }
+        }
+        for param in self.params.iter_mut().rev() {
+            if param.name == name {
+                param.global_shadow = Some(global_idx);
+                return;
+            }
+        }
     }
 }
 
@@ -128,6 +173,13 @@ impl Wasmizer {
     }
     fn current_func_mut(&mut self) -> &mut WasmFunc {
         self.frames.last_mut().unwrap()
+    }
+    fn get_frame_mut(&mut self, depth: usize) -> Option<&mut WasmFunc> {
+        if depth >= self.frames.len() {
+            return None;
+        }
+        let idx = self.frames.len() - depth - 1;
+        self.frames.get_mut(idx)
     }
     fn locals(&self) -> &LocalData {
         &self.current_func().locals
@@ -973,7 +1025,7 @@ impl Wasmizer {
     }
 
     pub fn add_param_name(&mut self, name: String) {
-        self.current_func_mut().param_names.push(name);
+        self.current_func_mut().params.push(Param::new(name));
     }
     pub fn create_variable(&mut self, name: String, typ: &ast::Type) -> Result<u32, String> {
         // only handle local variables for now
@@ -991,7 +1043,7 @@ impl Wasmizer {
 
         Ok(())
     }
-    pub fn get_variable(&mut self, name: String) -> Result<i32, String> {
+    pub fn get_variable(&mut self, name: String, typ: &ast::Type) -> Result<i32, String> {
         // TODO: can't yet deal with upvalues or recursive functions
         // first look in local variables
         let idx = self.current_func().get_local_idx(&name);
@@ -1005,6 +1057,12 @@ impl Wasmizer {
         if let Some(idx) = idx {
             self.write_opcode(Opcode::LocalGet);
             self.bytes_mut().append(&mut unsigned_leb128(idx));
+            return Ok(0);
+        }
+        // next, look in upvalues
+        if let Some(idx) = self.resolve_upvalue(&name, Numtype::from_ast_type(typ)?, 1)? {
+            self.write_opcode(Opcode::GlobalGet);
+            self.write_slice(&unsigned_leb128(idx));
             return Ok(0);
         }
         // look in global scope
@@ -1022,6 +1080,42 @@ impl Wasmizer {
         self.write_opcode(Opcode::I32Const);
         self.write_slice(&unsigned_leb128(idx));
         Ok(1)
+    }
+
+    fn resolve_upvalue(&mut self, name: &str, numtype: Numtype, depth: usize) -> Result<Option<u32>, String> {
+        let local_info = {
+            let parent = self.get_frame_mut(depth);
+            let parent = match parent {
+                Some(parent) => parent,
+                None => return Ok(None),
+            };
+            parent.get_idx_and_global_shadow(name)
+        };
+        if let Some((idx, global_shadow)) = local_info {
+            let global_idx = match global_shadow {
+                // Use pre-existing global variable
+                Some(global_shadow) => global_shadow,
+                // Create a new global variable to store the upvalue
+                None => {
+                    let global_idx = self.builder.add_global(
+                        Global::new(numtype, true, 0)
+                    );
+                    // Within the function where the value is defined, set the global variable to the appropriate value
+                    let parent = self.get_frame_mut(depth).unwrap();
+                    parent.bytes.push(Opcode::LocalGet as u8);
+                    parent.bytes.append(&mut unsigned_leb128(idx));
+                    parent.bytes.push(Opcode::GlobalSet as u8);
+                    parent.bytes.append(&mut unsigned_leb128(global_idx));
+                    // Record the index of the shadowing global variable
+                    parent.add_global_shadow(name, global_idx);
+
+                    global_idx
+                }
+            };
+            return Ok(Some(global_idx));
+        }
+        // try looking for the value one more frame up
+        self.resolve_upvalue(name, numtype, depth + 1)
     }
 
     fn get_callable_builtin(&mut self, name: &str) -> Result<u32, String> {

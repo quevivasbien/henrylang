@@ -15,7 +15,7 @@ Using cargo:
 * To run a script:
 
     ```
-    cargo run script.hl
+    cargo run [script name]
     ```
 
 (Or use `cargo build` or `cargo install`, then run the resulting binary.)
@@ -39,12 +39,25 @@ cargo run script.hl -- --wasm
 ```
 will run the script `script.hl` by compiling it to WASM, then executing the compiled web assembly using the Wasmer runtime. 
 
-At this point, most of the current language features are implemented for the WASM compiler. The following features are still in-progress:
+At this point, most of the current language features are implemented for the WASM compiler. The following is an overview of which features from the bytecode-compiled version of `henrylang` have been implemented, and which are still in-progress:
 
-* Capturing functions
+#### Finished
+
+* Arithmetic
+* Variables
+* Basic functions
+* UTF-8 Strings
+* Arrays
+* User-defined types
+* Iterators (ranges, mapping, filtering, reduction)
+* Capturing functions (closures)
+
+#### To-do
+
 * Recursion
 * Some built-in functions
 * Garbage collection
+
 
 ## Usage examples
 

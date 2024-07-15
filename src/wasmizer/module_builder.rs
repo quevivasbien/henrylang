@@ -48,6 +48,33 @@ impl DataSegment {
     }
 }
 
+pub struct Global {
+    numtype: Numtype,
+    mutable: bool,
+    initial_value: u32,
+}
+
+impl Global {
+    pub fn new(numtype: Numtype, mutable: bool, initial_value: u32) -> Self {
+        Self {
+            numtype,
+            mutable,
+            initial_value,
+        }
+    }
+    
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = vec![
+            self.numtype as u8,
+            self.mutable as u8,
+            self.numtype.const_op() as u8,
+        ];
+        result.append(&mut unsigned_leb128(self.initial_value));
+        result.push(Opcode::End as u8);
+        result
+    }
+}
+
 pub struct ModuleBuilder {
     // stores type signatures for each function
     pub functypes: Vec<FuncTypeSignature>,
@@ -59,6 +86,8 @@ pub struct ModuleBuilder {
     exports: Vec<Export>,
     // passive data segments
     data_segments: Vec<DataSegment>,
+    // information about globals
+    globals: Vec<Global>,
     // bytecode for each import
     pub imports: Vec<Vec<u8>>,
 }
@@ -72,6 +101,20 @@ impl Default for ModuleBuilder {
             func_bodies: vec![],
             exports: vec![mem_export],
             data_segments: vec![],
+            globals: vec![
+                // memptr
+                Global::new(
+                    Numtype::I32,
+                    true,
+                    0,
+                ),
+                // memsize
+                Global::new(
+                    Numtype::I32,
+                    true,
+                    1,
+                ),
+            ],
             imports: vec![],
         }
     }
@@ -156,6 +199,11 @@ impl ModuleBuilder {
         }
     }
 
+    pub fn add_global(&mut self, global: Global) -> u32 {
+        self.globals.push(global);
+        self.globals.len() as u32 - 1
+    }
+
     fn type_section(&self) -> Vec<u8> {
         section_from_chunks(
             SectionType::Type,
@@ -200,24 +248,7 @@ impl ModuleBuilder {
     fn global_section(&self) -> Vec<u8> {
         section_from_chunks(
             SectionType::Global,
-            &[
-                // global 0 is memptr
-                vec![
-                    Numtype::I32 as u8, // data type
-                    0x01,               // mutability (1 means mutable)
-                    Opcode::I32Const as u8,
-                    0x00, // initial value
-                    Opcode::End as u8,
-                ],
-                // global 1 is memsize
-                vec![
-                    Numtype::I32 as u8, // data type
-                    0x01,               // mutability (1 means mutable)
-                    Opcode::I32Const as u8,
-                    0x01, // initial value
-                    Opcode::End as u8,
-                ],
-            ],
+            &self.globals.iter().map(|x| x.to_bytes()).collect::<Vec<_>>(),
         )
     }
 
