@@ -73,7 +73,7 @@ fn test_primes() {
     is_prime := |n: Int| {
         if n = 2 { true }
         else {
-            sqrt_n := int(pow(float(n), 0.5)) + 1
+            sqrt_n := int(sqrt(float(n))) + 1
             all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
         }
     }

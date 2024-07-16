@@ -213,14 +213,18 @@ fn test_callable_builtins() {
     assert_eq!(run("sqrt(4.0)"), "2.0");
     assert_eq!(run("mod(5, 3)"), "2");
     assert_eq!(run("mod(-5, 3)"), "1");
+    assert_eq!(run("sum(0 to 100)"), "5050");
+    assert_eq!(run("sum(|x:Int|{float(x)} -> 0 to 100)"), "5050.0");
+    assert_eq!(run("prod(1 to 3)"), "6");
+    assert_eq!(run("prod(|x:Int|{float(x)} -> 1 to 3)"), "6.0");
+    assert_eq!(run("all(|x:Int|{mod(x, 2) = 0} -> 0 to 1234)"), "false");
+    assert_eq!(run("any(|x:Int|{mod(x, 2) = 0} -> 0 to 1234)"), "true");
+    assert_eq!(run("all(|x:Int|{mod(x, 2) = 0} -> filter(|x:Int|{mod(x, 2) = 0}, 0 to 1234))"), "true");
 }
 
 #[test]
 fn test_primes() {
     let result = run("
-    all := |iter: Iter(Bool)| {
-        reduce(|acc: Bool, x: Bool| { acc and x }, iter, true)
-    }
 
     is_prime := |n: Int| {
         if n = 2 { true }
@@ -228,10 +232,6 @@ fn test_primes() {
             sqrt_n := int(sqrt(float(n))) + 1
             all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
         }
-    }
-
-    sum := |iter: Iter(Int)| {
-        reduce(|acc: Int, x: Int| { acc + x }, iter, 0)
     }
 
     sum(filter(is_prime, 2 to 100))

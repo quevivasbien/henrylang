@@ -1,5 +1,4 @@
 use rustc_hash::FxHashMap;
-use std::time::UNIX_EPOCH;
 
 use lazy_static::lazy_static;
 
@@ -22,18 +21,6 @@ lazy_static! {
             })
         }
     };
-    static ref TIME: NativeFunction = NativeFunction {
-        name: "time",
-        arity: 0,
-        heap_arity: 0,
-        return_is_heap: false,
-        function: |vm, _args, _heap_args| {
-            let now = UNIX_EPOCH.elapsed().unwrap().as_secs_f64();
-            vm.stack.push(Value { f: now });
-            Ok(())
-        }
-    };
-
     static ref ITOF: NativeFunction = NativeFunction {
         name: "itof",
         arity: 1,
@@ -114,6 +101,16 @@ lazy_static! {
             })
         }
     };
+    static ref SQRT: NativeFunction = NativeFunction {
+        name: "sqrt",
+        arity: 1,
+        heap_arity: 0,
+        return_is_heap: false,
+        function: |vm, args, _heap_args| {
+            vm.stack.push(unsafe { Value { f: (args[0].f.sqrt()) } });
+            Ok(())
+        }
+    };
 
     static ref SUMF: NativeFunction = NativeFunction {
         name: "sumf",
@@ -184,13 +181,14 @@ lazy_static! {
 pub fn builtin_types() -> FxHashMap<String, Type> {
     let mut map = FxHashMap::default();
     map.insert("print[Str]".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
-    map.insert("time".to_string(), Type::Func(vec![], Box::new(Type::Float)));
     map.insert("float[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
     map.insert("int[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
 
     map.insert("mod[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     map.insert("pow[Int, Int]".to_string(), Type::Func(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     map.insert("pow[Float, Float]".to_string(), Type::Func(vec![Type::Float, Type::Float], Box::new(Type::Float)));
+
+    map.insert("sqrt[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Float)));
 
     map.insert("sum[Iter(Int)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
     map.insert("prod[Iter(Int)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)));
@@ -200,29 +198,25 @@ pub fn builtin_types() -> FxHashMap<String, Type> {
 
     map.insert("all[Iter(Bool)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
     map.insert("any[Iter(Bool)]".to_string(), Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)));
-    
-    map.insert("E".to_string(), Type::Float);
 
     map
 }
 
 pub fn builtins() -> FxHashMap<String, Value> {
-    let mut map = FxHashMap::default();
-    map.insert("E".to_string(), Value { f: std::f64::consts::E });
-
-    map
+    FxHashMap::default()
 }
 
 pub fn heap_builtins() -> FxHashMap<String, HeapValue> {
     let mut map = FxHashMap::default();
     map.insert("print[Str]".to_string(), HeapValue::NativeFunction(&PRINT));
-    map.insert("time".to_string(), HeapValue::NativeFunction(&TIME));
     map.insert("float[Int]".to_string(), HeapValue::NativeFunction(&ITOF));
     map.insert("int[Float]".to_string(), HeapValue::NativeFunction(&FTOI));
 
     map.insert("mod[Int, Int]".to_string(), HeapValue::NativeFunction(&MOD));
     map.insert("pow[Int, Int]".to_string(), HeapValue::NativeFunction(&POWI));
     map.insert("pow[Float, Float]".to_string(), HeapValue::NativeFunction(&POWF));
+
+    map.insert("sqrt[Float]".to_string(), HeapValue::NativeFunction(&SQRT));
 
     map.insert("sum[Iter(Int)]".to_string(), HeapValue::NativeFunction(&SUMI));
     map.insert("prod[Iter(Int)]".to_string(), HeapValue::NativeFunction(&PRODI));

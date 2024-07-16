@@ -105,6 +105,36 @@ impl Default for Env {
             "sqrt[Float]".to_string(),
             Type::Func(vec![Type::Float], Box::new(Type::Float)),
         );
+        global_types.insert(
+            "sum[Iter(Int)]".to_string(),
+            Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "sum[Iter(Float)]".to_string(),
+            Type::Func(
+                vec![Type::Iter(Box::new(Type::Float))],
+                Box::new(Type::Float),
+            ),
+        );
+        global_types.insert(
+            "prod[Iter(Int)]".to_string(),
+            Type::Func(vec![Type::Iter(Box::new(Type::Int))], Box::new(Type::Int)),
+        );
+        global_types.insert(
+            "prod[Iter(Float)]".to_string(),
+            Type::Func(
+                vec![Type::Iter(Box::new(Type::Float))],
+                Box::new(Type::Float),
+            ),
+        );
+        global_types.insert(
+            "all[Iter(Bool)]".to_string(),
+            Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)),
+        );
+        global_types.insert(
+            "any[Iter(Bool)]".to_string(),
+            Type::Func(vec![Type::Iter(Box::new(Type::Bool))], Box::new(Type::Bool)),
+        );
         let global_types = Rc::new(RefCell::new(global_types));
 
         Self::new(global_scope, global_types)

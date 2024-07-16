@@ -90,7 +90,7 @@ mysum(0 to 10) = sum(0 to 10)
 is_prime := |n: Int| {
     if n = 2 { true }
     else {
-        sqrt_n := int(pow(float(n), 0.5)) + 1
+        sqrt_n := int(sqrt(float(n))) + 1
         all(|p: Int| { mod(n, p) != 0 } -> 2 to sqrt_n)
     }
 }
@@ -103,7 +103,7 @@ filter(is_prime, 2 to 100)
 Complex := type { re: Float, im: Float }
 
 norm := |x: Complex| {
-    pow(x.re * x.re + x.im * x.im, 0.5)
+    sqrt(x.re * x.re + x.im * x.im)
 }
 
 x := Complex(1.0, -1.0)

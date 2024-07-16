@@ -62,7 +62,7 @@ impl BuiltinFunc {
         self.bytes.extend_from_slice(bytes);
     }
     pub fn write_var(&mut self, name: &str) {
-        let idx = self.get_var_idx(name).unwrap();
+        let idx = self.get_var_idx(name).expect(&format!("When building function, variable {} not found", name));
         self.write_slice(&idx);
     }
 
@@ -664,6 +664,109 @@ pub fn define_builtin_mod() -> BuiltinFunc {
     func.write_var("y");
     func.write_opcode(Opcode::I32RemS);
     func.write_opcode(Opcode::End);
+
+    func
+}
+
+pub fn define_builtin_reduce_iter(
+    numtype: Numtype,
+    operation: &str,
+    advance_fn_type_idx: u32,
+) -> BuiltinFunc {
+    let mut func = BuiltinFunc::new(
+        FuncTypeSignature::new(vec![Numtype::I64], Some(numtype)),
+        vec!["iter_fatptr".to_string()],
+    );
+    func.add_local("iter_offset", Numtype::I32);
+    func.add_local("total", numtype);
+
+    // if this is a product, we need to initialize the total to 1
+    if operation == "prod" || operation == "all" {
+        func.write_opcode(numtype.const_op());
+        match numtype {
+            Numtype::F32 => func.write_slice(&[0x00, 0x00, 0x80, 0x3F]),
+            _ => func.write_byte(1),
+        }
+        func.write_opcode(Opcode::LocalSet);
+        func.write_var("total");
+    }
+
+    // iter_offset = iter_fatpr >> 32
+    func.write_opcode(Opcode::LocalGet);
+    func.write_var("iter_fatptr");
+    func.write_opcode(Opcode::I64Const);
+    func.write_byte(0x20);
+    func.write_opcode(Opcode::I64ShrU);
+    func.write_opcode(Opcode::I32WrapI64);
+    func.write_opcode(Opcode::LocalSet);
+    func.write_var("iter_offset");
+
+    func.write_opcode(Opcode::Loop);
+    func.write_byte(Numtype::Void as u8);
+
+    // call iterator->advance
+    let advance_fn_delta = numtype.size();
+    func.iter_call_advance("iter_offset", advance_fn_delta, advance_fn_type_idx);
+
+    // if !iterator->done
+    func.write_opcode(Opcode::I32Eqz);
+    func.write_opcode(Opcode::If);
+    func.write_byte(Numtype::Void as u8);
+    // total += iterator->current
+    func.write_opcode(Opcode::LocalGet);
+    func.write_var("iter_offset");
+    func.write_opcode(numtype.load_op());
+    func.write_byte(0x02); // alignment
+    func.write_byte(0x00); // load offset
+    func.write_opcode(Opcode::LocalGet);
+    func.write_var("total");
+    func.write_opcode(match (numtype, operation) {
+        (Numtype::I32, "sum") => Opcode::I32Add,
+        (Numtype::F32, "sum") => Opcode::F32Add,
+        (Numtype::I32, "prod") => Opcode::I32Mul,
+        (Numtype::F32, "prod") => Opcode::F32Mul,
+        (Numtype::I32, "all") => Opcode::I32And,
+        (Numtype::I32, "any") => Opcode::I32Or,
+        _ => panic!("Cannot define {} for {}", operation, numtype),
+    });
+    func.write_opcode(Opcode::LocalSet);
+    func.write_var("total");
+
+    // cases for whether to loop again
+    match operation {
+        "all" => {
+            // exit early if total == 0
+            // i.e., branch if total != 0
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("total");
+            func.write_opcode(Opcode::BrIf);
+            func.write_byte(1);
+        }
+        "any" => {
+            // exit early if total != 0
+            // i.e., branch if total == 0
+            func.write_opcode(Opcode::LocalGet);
+            func.write_var("total");
+            func.write_opcode(Opcode::I32Eqz);
+            func.write_opcode(Opcode::BrIf);
+            func.write_byte(1);
+        }
+        _ => {
+            // always branch to loop
+            func.write_opcode(Opcode::Br);
+            func.write_byte(1); // 1 since we need to leave the if statement
+        }
+    }
+
+    func.write_opcode(Opcode::End); // end if
+
+    func.write_opcode(Opcode::End); // end loop
+
+    // return total
+    func.write_opcode(Opcode::LocalGet);
+    func.write_var("total");
+
+    func.write_opcode(Opcode::End); // end function
 
     func
 }
@@ -1725,7 +1828,11 @@ pub fn define_builtin_array_iter_factory(
     func
 }
 
-pub fn define_builtin_iter_collect(numtype: Numtype, alloc_idx: u32, advance_fn_type_idx: u32) -> BuiltinFunc {
+pub fn define_builtin_iter_collect(
+    numtype: Numtype,
+    alloc_idx: u32,
+    advance_fn_type_idx: u32,
+) -> BuiltinFunc {
     let mut func = BuiltinFunc::new(
         // takes an Iter and returns an Arr
         FuncTypeSignature::new(vec![Numtype::I64], Some(Numtype::I64)),
@@ -1895,10 +2002,7 @@ pub fn define_builtin_iter_collect(numtype: Numtype, alloc_idx: u32, advance_fn_
     func
 }
 
-pub fn define_builtin_iter_last(
-    iter_type: Numtype,
-    advance_fn_type_idx: u32,
-) -> BuiltinFunc {
+pub fn define_builtin_iter_last(iter_type: Numtype, advance_fn_type_idx: u32) -> BuiltinFunc {
     let mut func = BuiltinFunc::new(
         // takes an Iter([type]) and returns a value of type [type]
         FuncTypeSignature::new(vec![Numtype::I64], Some(iter_type)),

@@ -110,7 +110,10 @@ impl WasmFunc {
 
     fn get_idx_and_global_shadow(&self, name: &str) -> Option<(u32, Option<u32>)> {
         if let Some(local_idx) = self.get_local_idx(name) {
-            return Some((local_idx, self.locals.locals[local_idx as usize].global_shadow));
+            return Some((
+                local_idx,
+                self.locals.locals[local_idx as usize].global_shadow,
+            ));
         }
         if let Some(param_idx) = self.get_param_idx(name) {
             return Some((param_idx, self.params[param_idx as usize].global_shadow));
@@ -356,17 +359,17 @@ impl Wasmizer {
     pub fn write_const(&mut self, value: &str, typ: &ast::Type) -> Result<(), String> {
         match typ {
             ast::Type::Int => {
-                let value = value.parse::<i32>().unwrap();
+                let value = value.parse::<i32>().map_err(|e| e.to_string())?;
                 self.write_opcode(Opcode::I32Const);
                 self.bytes_mut().append(&mut signed_leb128(value));
             }
             ast::Type::Float => {
-                let value = value.parse::<f32>().unwrap();
+                let value = value.parse::<f32>().map_err(|e| e.to_string())?;
                 self.write_opcode(Opcode::F32Const);
                 self.write_slice(&value.to_le_bytes());
             }
             ast::Type::Bool => {
-                let value = value.parse::<bool>().unwrap();
+                let value = value.parse::<bool>().map_err(|e| e.to_string())?;
                 self.write_opcode(Opcode::I32Const);
                 self.write_byte(if value { 1 } else { 0 });
             }
@@ -629,10 +632,7 @@ impl Wasmizer {
             return Ok(*idx);
         }
 
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
 
         let func = builtin_funcs::define_builtin_iter_len(memsize, advance_fn_type_idx);
 
@@ -1044,7 +1044,7 @@ impl Wasmizer {
         Ok(())
     }
     pub fn get_variable(&mut self, name: String, typ: &ast::Type) -> Result<i32, String> {
-        // TODO: can't yet deal with upvalues or recursive functions
+        // TODO: can't yet deal with recursive functions
         // first look in local variables
         let idx = self.current_func().get_local_idx(&name);
         if let Some(idx) = idx {
@@ -1082,7 +1082,12 @@ impl Wasmizer {
         Ok(1)
     }
 
-    fn resolve_upvalue(&mut self, name: &str, numtype: Numtype, depth: usize) -> Result<Option<u32>, String> {
+    fn resolve_upvalue(
+        &mut self,
+        name: &str,
+        numtype: Numtype,
+        depth: usize,
+    ) -> Result<Option<u32>, String> {
         let local_info = {
             let parent = self.get_frame_mut(depth);
             let parent = match parent {
@@ -1097,9 +1102,7 @@ impl Wasmizer {
                 Some(global_shadow) => global_shadow,
                 // Create a new global variable to store the upvalue
                 None => {
-                    let global_idx = self.builder.add_global(
-                        Global::new(numtype, true, 0)
-                    );
+                    let global_idx = self.builder.add_global(Global::new(numtype, true, 0));
                     // Within the function where the value is defined, set the global variable to the appropriate value
                     let parent = self.get_frame_mut(depth).unwrap();
                     parent.bytes.push(Opcode::LocalGet as u8);
@@ -1132,6 +1135,36 @@ impl Wasmizer {
             "int[Float]" => builtin_funcs::define_builtin_ftoi(),
             "sqrt[Float]" => builtin_funcs::define_builtin_sqrt_float(),
             "mod[Int, Int]" => builtin_funcs::define_builtin_mod(),
+            "sum[Iter(Int)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::I32,
+                "sum",
+                self.get_advance_fn_type_idx(),
+            ),
+            "sum[Iter(Float)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::F32,
+                "sum",
+                self.get_advance_fn_type_idx(),
+            ),
+            "prod[Iter(Int)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::I32,
+                "prod",
+                self.get_advance_fn_type_idx(),
+            ),
+            "prod[Iter(Float)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::F32,
+                "prod",
+                self.get_advance_fn_type_idx(),
+            ),
+            "all[Iter(Bool)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::I32,
+                "all",
+                self.get_advance_fn_type_idx(),
+            ),
+            "any[Iter(Bool)]" => builtin_funcs::define_builtin_reduce_iter(
+                Numtype::I32,
+                "any",
+                self.get_advance_fn_type_idx(),
+            ),
             _ => return Err(format!("variable {} not found", name)),
         };
         let fn_idx = self.builder.add_builtin(&func)?;
@@ -1253,6 +1286,13 @@ impl Wasmizer {
         Ok(())
     }
 
+    fn get_advance_fn_type_idx(&mut self) -> u32 {
+        self.builder.get_functype_idx(&FuncTypeSignature::new(
+            vec![Numtype::I32],
+            Some(Numtype::I32),
+        ))
+    }
+
     // create a struct type that is used to store ranges
     fn get_range_iter_factory(&mut self) -> Result<u32, String> {
         if let Some(idx) = self.builtins.get("<RangeIterFactory>") {
@@ -1313,10 +1353,7 @@ impl Wasmizer {
         let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize the "advance" function used by this Iter type
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
         let map_fn_type_idx = self
             .builder
             .get_functype_idx(&FuncTypeSignature::new(vec![in_type], Some(out_type)));
@@ -1368,10 +1405,7 @@ impl Wasmizer {
         let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize advance fn
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
         let reduce_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
             vec![acc_type, x_type],
             Some(acc_type),
@@ -1424,10 +1458,7 @@ impl Wasmizer {
         let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize advance fn
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
         let filter_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
             vec![inner_type],
             Some(Numtype::I32),
@@ -1494,10 +1525,7 @@ impl Wasmizer {
         let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize advance fn
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
         let map_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
             iter_over_types.to_vec(),
             Some(out_type),
@@ -1553,14 +1581,22 @@ impl Wasmizer {
         let constructor_idx = self.create_struct(struct_name.clone(), struct_def, false)?;
 
         // initialize "advance" function
-        let func = builtin_funcs::define_builtin_array_iter_advance(numtype, inner_offset_delta, max_inner_offset_delta);
+        let func = builtin_funcs::define_builtin_array_iter_advance(
+            numtype,
+            inner_offset_delta,
+            max_inner_offset_delta,
+        );
 
         let advance_fn_idx = self.builder.add_builtin(&func)?;
         self.builtins
             .insert(format!("<ArrIter[{}]Advance>", numtype), advance_fn_idx);
 
         // create helper function for creating iter from fatptr to array
-        let func = builtin_funcs::define_builtin_array_iter_factory(numtype, advance_fn_idx - self.builder.imports.len() as u32, constructor_idx);
+        let func = builtin_funcs::define_builtin_array_iter_factory(
+            numtype,
+            advance_fn_idx - self.builder.imports.len() as u32,
+            constructor_idx,
+        );
 
         let factory_idx = self.builder.add_builtin(&func)?;
         self.builtins.insert(factory_name, factory_idx);
@@ -1577,11 +1613,9 @@ impl Wasmizer {
         }
 
         let alloc_idx = *self.builtins.get("alloc").unwrap();
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
-        let func = builtin_funcs::define_builtin_iter_collect(numtype, alloc_idx, advance_fn_type_idx);
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
+        let func =
+            builtin_funcs::define_builtin_iter_collect(numtype, alloc_idx, advance_fn_type_idx);
 
         let fn_idx = self.builder.add_builtin(&func)?;
         self.builtins.insert(fn_name, fn_idx);
@@ -1597,10 +1631,7 @@ impl Wasmizer {
             return Ok(*idx);
         }
 
-        let advance_fn_type_idx = self.builder.get_functype_idx(&FuncTypeSignature::new(
-            vec![Numtype::I32],
-            Some(Numtype::I32),
-        ));
+        let advance_fn_type_idx = self.get_advance_fn_type_idx();
         let func = builtin_funcs::define_builtin_iter_last(iter_type, advance_fn_type_idx);
 
         let fn_idx = self.builder.add_builtin(&func)?;
