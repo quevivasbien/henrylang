@@ -239,3 +239,30 @@ fn test_primes() {
 
     assert_eq!(result, "1060");
 }
+
+#[test]
+fn test_taylor_series() {
+    let result = run("
+    factorial := |x: Int| {
+        if x <= 1 {
+            1
+        }
+        else {
+            prod(1 to x)
+        }
+    }
+    
+    approx_e := |n: Int|: Float {
+        if n = 0 {
+            1.0
+        }
+        else {
+            1.0 / float(factorial(n)) + approx_e(n-1)
+        }
+    }
+    
+    approx_e(10)
+    ");
+
+    assert_eq!(result, "2.718282");
+}

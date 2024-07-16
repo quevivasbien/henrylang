@@ -63,6 +63,22 @@ impl Expression for Variable {
 
     fn wasmize(&self, wasmizer: &mut Wasmizer) -> Result<i32, String> {
         let name = self.get_expanded_name()?;
-        wasmizer.get_variable(name, &self.get_type()?)
+        // need to figure out whether or not the variable in question is a function within the function's definition
+        // i.e., a recursive function call
+        let mut name_matches_func = None;
+        let mut parent = self.get_parent();
+        while parent.is_some() {
+            let e = unsafe { &*(parent.unwrap() as *const dyn Expression) };
+            if let Some(func) = e.downcast_ref::<Function>() {
+                let func_name = func.get_expanded_name()?;
+                if func_name == name {
+                    // figure out how many more functions will be defined before the referenced function is completed
+                    name_matches_func = Some(func.count_function_chidren());
+                    break;
+                }
+            }
+            parent = e.get_parent();
+        }
+        wasmizer.get_variable(name, &self.get_type()?, name_matches_func)
     }
 }

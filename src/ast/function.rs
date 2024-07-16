@@ -33,6 +33,16 @@ impl Function {
         let param_types = self.param_types()?;
         Ok(Some(Type::Func(param_types, Box::new(return_type))))
     }
+
+    pub fn get_expanded_name(&self) -> Result<String, String> {
+        Ok(format!("{}{:?}", self.name, self.param_types()?))
+    }
+
+    // get the number of functions defined within this function
+    pub fn count_function_chidren(&self) -> usize {
+        let block = self.block.downcast_ref::<Block>().unwrap();
+        block.count_function_chidren()
+    }
 }
 
 impl Expression for Function {

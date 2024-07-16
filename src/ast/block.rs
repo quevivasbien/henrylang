@@ -15,6 +15,21 @@ impl Block {
         };
         Ok(Self { expressions, parent: None })
     }
+
+    // get the number of functions defined within this block
+    pub fn count_function_chidren(&self) -> usize {
+        let mut count = 0;
+        for e in self.expressions.iter() {
+            if let Some(block) = e.downcast_ref::<Block>() {
+                count += block.count_function_chidren();
+            }
+            if let Some(function) = e.downcast_ref::<Function>() {
+                count += 1 + function.count_function_chidren();
+
+            }
+        }
+        count
+    }
 }
 
 impl Expression for Block {

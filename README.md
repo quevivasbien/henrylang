@@ -43,20 +43,20 @@ At this point, most of the current language features are implemented for the WAS
 
 #### Finished
 
-* Arithmetic
-* Variables
-* Basic functions
-* UTF-8 Strings
-* Arrays
-* User-defined types
-* Iterators (ranges, mapping, filtering, reduction)
-* Capturing functions (closures)
+- Arithmetic
+- Variables
+- Basic functions
+- UTF-8 Strings
+- Arrays
+- User-defined types
+- Iterators (ranges, mapping, filtering, reduction)
+- Capturing functions (closures)
+- Builtin functions
+- Recursive functions
 
 #### To-do
 
-* Recursion
-* Some built-in functions
-* Garbage collection
+- Garbage collection
 
 
 ## Usage examples

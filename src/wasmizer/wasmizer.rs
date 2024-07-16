@@ -1043,7 +1043,7 @@ impl Wasmizer {
 
         Ok(())
     }
-    pub fn get_variable(&mut self, name: String, typ: &ast::Type) -> Result<i32, String> {
+    pub fn get_variable(&mut self, name: String, typ: &ast::Type, name_matches_func: Option<usize>) -> Result<i32, String> {
         // TODO: can't yet deal with recursive functions
         // first look in local variables
         let idx = self.current_func().get_local_idx(&name);
@@ -1057,6 +1057,13 @@ impl Wasmizer {
         if let Some(idx) = idx {
             self.write_opcode(Opcode::LocalGet);
             self.bytes_mut().append(&mut unsigned_leb128(idx));
+            return Ok(0);
+        }
+        // if the variable name matches the name of an enclosing function, figure out what index that function will have
+        if let Some(func_idx) = name_matches_func {
+            let func_idx = self.builder.funcs.len() + func_idx;
+            self.write_opcode(Opcode::I32Const);
+            self.write_slice(&unsigned_leb128(func_idx as u32));
             return Ok(0);
         }
         // next, look in upvalues
@@ -1183,6 +1190,7 @@ impl Wasmizer {
         Ok(())
     }
     pub fn call(&mut self) -> Result<(), String> {
+        // TODO: The way this is done currently will cause problems if more than 256 builtins or imports are defined, which is likely in a sufficiently complicated module.
         let fn_idx = self.bytes_mut().pop().expect(
             "No values left in bytes when attempting to pop Value for direct function call",
         );
