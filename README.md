@@ -2,6 +2,8 @@
 
 `henry` is a language designed for lobsters.
 
+This repository includes both a bytecode interpreter and a web assembly compiler for henrylang. Both implementations are built from scratch; the only major dependency is Wasmer, which is used as a web assembly runtime.
+
 ## How to run
 
 Using cargo:
@@ -20,24 +22,19 @@ Using cargo:
 
 (Or use `cargo build` or `cargo install`, then run the resulting binary.)
 
-## Features
-
-- All variables are immutable.
-- Everything is an expression.
-- Functions are first-class.
-- Types are resolved at compile time.
-- Iterators are lazy.
-- Functions can be overloaded for different argument types.
-
-## In-progress
-
-### Compilation to WASM
+## Compilation to WASM
 
 Enable with the `--wasm` flag. For example, if building & running with cargo, the command
 ```
 cargo run script.hl -- --wasm
 ```
-will run the script `script.hl` by compiling it to WASM, then executing the compiled web assembly using the Wasmer runtime. 
+will run the script `script.hl` by compiling it to WASM, then executing the compiled web assembly using the Wasmer runtime.
+
+If you want to instead compile code to be run in a web environment, you can provide the `--save` flag. For example,
+```
+cargo run script.hl -- --save
+```
+will create a directory called `script_wasm` that contains 3 files: an `index.html`, `index.js`, and `module.wasm`. You can open `index.html` in a web browser to see a simple example that loads and runs the web assembly module and displays the result.
 
 At this point, most of the current language features are implemented for the WASM compiler. The following is an overview of which features from the bytecode-compiled version of `henrylang` have been implemented, and which are still in-progress:
 
@@ -58,6 +55,14 @@ At this point, most of the current language features are implemented for the WAS
 
 - Garbage collection
 
+## Features
+
+- All variables are immutable.
+- Everything is an expression.
+- Functions are first-class.
+- Types are resolved at compile time.
+- Iterators are lazy.
+- Functions can be overloaded for different argument types.
 
 ## Usage examples
 

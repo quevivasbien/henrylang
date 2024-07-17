@@ -64,7 +64,7 @@ fn repl() {
     rl.save_history(HISTORY_FILE).unwrap();
 }
 
-fn run_file(path: &str, as_wasm: bool) {
+fn run_file(path: &str, wasm_run: bool, wasm_save: bool) {
     // read file to string
     let contents = match std::fs::read_to_string(path) {
         Ok(x) => x,
@@ -73,20 +73,34 @@ fn run_file(path: &str, as_wasm: bool) {
             return;
         }
     };
-    if !as_wasm {
+    if !wasm_run && !wasm_save {
         match VM::new().interpret(&contents) {
             Ok(x) => println!("{}", x),
             Err(e) => println!("{}", e),
+        };
+        return;
+    }
+
+    let (bytes, result_type) = match wasmize(&contents, Env::default()) {
+        Ok((bytes, result_type)) => (bytes, result_type),
+        Err(e) => {
+            println!("Compile Error: {}", e);
+            return;
+        }
+    };
+    if wasm_save {
+        // get rid of file extension
+        let path = path.split('.').next().expect("Filename is invalid");
+        match save_wasm(&bytes, path, &result_type) {
+            Ok(()) => (),
+            Err(e) => println!("Failed to save wasm: {}", e),
         }
     }
-    else {
-        match wasmize(&contents, Env::default()) {
-            Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
-                Ok(x) => println!("{}", x),
-                Err(e) => println!("Runtime Error: {}", e),
-            },
-            Err(e) => println!("Compile Error: {}", e),
-        }
+    if wasm_run {
+        match run_wasm(&bytes, result_type) {
+            Ok(x) => println!("{}", x),
+            Err(e) => println!("Runtime Error: {}", e),
+        };
     }
 }
 
@@ -94,18 +108,23 @@ fn main() {
     let args = std::env::args().filter(|x| !x.starts_with("-")).collect::<Vec<_>>();
     let flags = std::env::args().filter(|x| x.starts_with("-")).collect::<Vec<_>>();
 
-    let use_wasm = flags.iter().any(|x| x == "--wasm");
-    if use_wasm {
-        println!("Note: wasm mode is experimental and will not apply in the REPL unless compiled with wasm_repl feature enabled");
-    }
-
+    let wasm_run = flags.iter().any(|x| x == "--wasm");
+    let wasm_save = flags.iter().any(|x| x == "--save");
+    
     if args.len() == 1 {
+        #[cfg(not(feature = "wasm_repl"))]
+        if wasm_run {
+            println!("Note: wasm mode will not apply in the REPL unless compiled with wasm_repl feature enabled");
+        }
         repl();
     }
     else if args.len() == 2 {
-        run_file(&args[1], use_wasm);
+        run_file(&args[1], wasm_run, wasm_save);
     }
     else {
-        println!("Usage: `{}` for REPL or `{} <script> [--wasm]`", args[0], args[0]);
+        println!("Usage: `{}` for REPL or `{} <script> [--build] [--wasm]`", args[0], args[0]);
+        println!("Flags:");
+        println!("  --wasm   Compile script to wasm and run it");
+        println!("  --save   Compile script to wasm and save it to <script>.wasm");
     }
 }

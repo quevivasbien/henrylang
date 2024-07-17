@@ -338,3 +338,131 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
 
     Ok(result)
 }
+
+const HTML_TEMPLATE: &str = r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>WASM HTML template</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <h1>WASM HTML template</h1>
+
+    <button id="button-run">Run WASM</button>
+    <p>Result: <span id="result"></span></p>
+
+    <script src="index.js" type="module"></script>
+</body>
+</html>
+"#;
+
+// TODO: Handle Object type
+const JS_TEMPLATE: &str = r#"
+const WASM_MODULE = "module.wasm";
+
+const importObject = {
+    env: {
+        "print[Int]": (x) => { console.log(x); return x; },
+        "print[Float]": (x) => { console.log(x); return x; },
+        "pow[Int, Int]": (x, y) => x ** y,
+        "pow[Float, Float]": (x, y) => x ** y,
+    }
+}
+
+export default async function main() {
+    return WebAssembly.instantiateStreaming(fetch(WASM_MODULE), importObject).then(
+        (results) => {
+            const { main, memory } = results.instance.exports;
+            return unwrap_result(main(), memory);
+        },
+    );
+}
+
+function unwrap_result(result, memory, type = RESULT_TYPE) {
+    switch (type) {
+        case "Int":
+            return result;
+        case "Bool":
+            return result ? "true" : "false";
+        case "Float":
+            return result.toPrecision(8);
+        case "Str":
+            return unwrap_str(result, memory);
+        default:
+            return unwrap_complex_type(result, memory, type);
+    }
+}
+
+function unwrap_str(result, memory) {
+    const ptr = Number(result >> 32n);
+    const size = Number(result & 0xFFFFFFFFn);
+    const str = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, size));
+    return str;
+}
+
+function unwrap_complex_type(result, memory, type) {
+    const regex = /([^\(]+)\((.+)\)/;
+    const match = regex.exec(type);
+    const main_type = match[1];
+    const subtypes = match[2];
+
+    if (main_type === "Arr") {
+        return unwrap_arr(result, memory, subtypes);
+    }
+    if (main_type === "Iter") {
+        return `<Iterator over objects of type ${subtypes}>`;
+    }
+    if (main_type === "Func") {
+        return `<Function ${subtypes}>`;
+    }
+
+    return "<Unknown type>";
+}
+
+function unwrap_arr(result, memory, subtype) {
+    const ptr = Number(result >> 32n);
+    const size = Number(result & 0xFFFFFFFFn);
+    let out;
+    if (subtype.startsWith("Int")) {
+        out = Array.from(new Uint32Array(memory.buffer, ptr, size / 4));
+    }
+    else if (subtype.startsWith("Float")) {
+        out = Array.from(new Float32Array(memory.buffer, ptr, size / 4));
+    }
+    else if (subtype.startsWith("Func")) {
+        const data_arr = new Uint32Array(memory.buffer, ptr, size / 4);
+        out = Array.from(data_arr).map((x) => unwrap_complex_type(x, memory, subtype));
+    }
+    else {
+        const data_arr = new BigUint64Array(memory.buffer, ptr, size / 8);
+        out = Array.from(data_arr).map((x) => unwrap_result(x, memory, subtype));
+    }
+    return `[${out.join(", ")}]`;
+}
+
+document.getElementById("button-run").addEventListener("click", async () => {
+    const result = await main();
+    document.getElementById("result").textContent = result;
+});
+"#;
+
+pub fn save_wasm(bytes: &[u8], path: &str, typ: &Type) -> Result<(), String> {
+    // create folder if it doesn't exist
+    let folder_name = format!("wasm_{}", path);
+    if !std::path::Path::new(&folder_name).exists() {
+        std::fs::create_dir(&folder_name).unwrap();
+    }
+    // write WASM bytes to file
+    std::fs::write(format!("{}/module.wasm", &folder_name), &bytes).unwrap();
+
+    // write HTML template to file
+    std::fs::write(format!("{}/index.html", &folder_name), HTML_TEMPLATE).unwrap();
+
+    // add the necessary unwrapping code to the JS template, then save it
+    let unwrap_result_type = format!("const RESULT_TYPE = \"{:?}\";", typ);
+    std::fs::write(format!("{}/index.js", &folder_name), format!("{}{}", unwrap_result_type, JS_TEMPLATE)).unwrap();
+
+    Ok(())
+}
