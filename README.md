@@ -1,40 +1,48 @@
 # henrylang
 
-`henry` is a language designed for lobsters.
+`henrylang` is a programming language.
 
-This repository includes both a bytecode interpreter and a web assembly compiler for henrylang. Both implementations are built from scratch; the only major dependency is Wasmer, which is used as a web assembly runtime.
+This repository includes both a bytecode interpreter and a web assembly compiler for henrylang. Both implementations are built from scratch.
 
 ## How to run
 
-Using cargo:
+Compile with cargo:
+```bash
+cargo build --release
+```
 
-* For an interactive interpreter session:
+Compile & run:
+```bash
+cargo run --release
+```
 
-    ```
-    cargo run
-    ```
+Or install on your machine:
+```bash
+cargo install --path .
+```
 
-* To run a script:
-
-    ```
-    cargo run [script name]
-    ```
-
-(Or use `cargo build` or `cargo install`, then run the resulting binary.)
+This will create an executable called `henrylang`. You can run that executable for an interactive interpreter session, or provide a file to run, i.e.,
+```bash
+henrylang script.hl
+```
 
 ## Compilation to WASM
 
-Enable with the `--wasm` flag. For example, if building & running with cargo, the command
-```
-cargo run script.hl -- --wasm
-```
-will run the script `script.hl` by compiling it to WASM, then executing the compiled web assembly using the Wasmer runtime.
-
-If you want to instead compile code to be run in a web environment, you can provide the `--save` flag. For example,
-```
-cargo run script.hl -- --save
+If you want to compile code to be run in a web environment, you can provide the `--save` flag. For example,
+```bash
+henrylang script.hl --save
 ```
 will create a directory called `script_wasm` that contains 3 files: an `index.html`, `index.js`, and `module.wasm`. You can open `index.html` in a web browser to see a simple example that loads and runs the web assembly module and displays the result.
+
+There is also the option to run web assembly code using the Wasmer runtime. To allow this, you'll need to compile with the `wasmer` feature enabled: e.g.,
+```bash
+cargo build --release -F=wasmer
+```
+Then you can supply the `--wasm` flag to run scripts by compiling them to web assembly, then running it with the Wasmer runtime (instead of using the bytecode interpreter). For example:
+```bash
+henrylang script.hl --wasm
+```
+
 
 At this point, most of the current language features are implemented for the WASM compiler. The following is an overview of which features from the bytecode-compiled version of `henrylang` have been implemented, and which are still in-progress:
 
@@ -54,6 +62,8 @@ At this point, most of the current language features are implemented for the WAS
 #### To-do
 
 - Garbage collection
+
+Note that the bytecode interpreter uses 64 bit data types, while the WASM implementation uses 32 bit types.
 
 ## Features
 

@@ -6,6 +6,28 @@ use crate::ast::Type;
 use crate::values::{HeapValue, NativeFunction, Value};
 
 lazy_static! {
+    static ref PRINTI: NativeFunction = NativeFunction {
+        name: "printi",
+        arity: 1,
+        heap_arity: 0,
+        return_is_heap: false,
+        function: |vm, args, _heap_args| {
+            println!("{}", unsafe { args[0].i });
+            vm.stack.push(args[0]);
+            Ok(())
+        }
+    };
+    static ref PRINTF: NativeFunction = NativeFunction {
+        name: "printf",
+        arity: 1,
+        heap_arity: 0,
+        return_is_heap: false,
+        function: |vm, args, _heap_args| {
+            println!("{}", unsafe { args[0].f });
+            vm.stack.push(args[0]);
+            Ok(())
+        }
+    };
     static ref PRINT: NativeFunction = NativeFunction {
         name: "print",
         arity: 0,
@@ -180,6 +202,8 @@ lazy_static! {
 
 pub fn builtin_types() -> FxHashMap<String, Type> {
     let mut map = FxHashMap::default();
+    map.insert("print[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Int)));
+    map.insert("print[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Float)));
     map.insert("print[Str]".to_string(), Type::Func(vec![Type::Str], Box::new(Type::Str)));
     map.insert("float[Int]".to_string(), Type::Func(vec![Type::Int], Box::new(Type::Float)));
     map.insert("int[Float]".to_string(), Type::Func(vec![Type::Float], Box::new(Type::Int)));
@@ -208,6 +232,9 @@ pub fn builtins() -> FxHashMap<String, Value> {
 
 pub fn heap_builtins() -> FxHashMap<String, HeapValue> {
     let mut map = FxHashMap::default();
+
+    map.insert("print[Int]".to_string(), HeapValue::NativeFunction(&PRINTI));
+    map.insert("print[Float]".to_string(), HeapValue::NativeFunction(&PRINTF));
     map.insert("print[Str]".to_string(), HeapValue::NativeFunction(&PRINT));
     map.insert("float[Int]".to_string(), HeapValue::NativeFunction(&ITOF));
     map.insert("int[Float]".to_string(), HeapValue::NativeFunction(&FTOI));

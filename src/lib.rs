@@ -13,4 +13,7 @@ mod vm;
 pub use ast::Type;
 pub use vm::VM;
 pub use wasmizer::wasmize;
-pub use env::{Env, run_wasm, save_wasm};
+pub use env::{Env, save_wasm};
+
+#[cfg(feature = "wasmer")]
+pub use env::run_wasm;

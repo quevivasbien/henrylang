@@ -8,19 +8,23 @@ use crate::{
     wasmizer::wasmtypes::{FuncTypeSignature, Numtype},
 };
 
+#[cfg(feature = "wasmer")]
 fn print<T: std::fmt::Display>(x: T) -> T {
     println!("{}", x);
     x
 }
 
+#[cfg(feature = "wasmer")]
 fn powi(x: i32, y: i32) -> i32 {
     x.pow(y as u32)
 }
 
+#[cfg(feature = "wasmer")]
 fn powf(x: f32, y: f32) -> f32 {
     x.powf(y)
 }
 
+#[cfg(feature = "wasmer")]
 pub fn get_wasmer_imports(store: &mut wasmer::Store) -> wasmer::Imports {
     wasmer::imports! {
         "env" => {
@@ -173,6 +177,7 @@ impl Env {
     }
 }
 
+#[cfg(feature = "wasmer")]
 fn view_string(memview: &wasmer::MemoryView, offset: u64, size: u64) -> Result<String, String> {
     let mut buf = vec![0u8; size as usize];
     memview
@@ -184,6 +189,7 @@ fn view_string(memview: &wasmer::MemoryView, offset: u64, size: u64) -> Result<S
     Ok(out)
 }
 
+#[cfg(feature = "wasmer")]
 fn view_object(
     memview: &wasmer::MemoryView,
     offset: u64,
@@ -225,6 +231,7 @@ fn view_object(
     Ok(format!("{} {{ {} }}", name, str_comps.join(", ")))
 }
 
+#[cfg(feature = "wasmer")]
 fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<String, String> {
     let offset = (fatptr >> 32) as u64;
     let size = (fatptr & 0xffffffff) as u64;
@@ -298,6 +305,7 @@ fn view_memory(memview: &wasmer::MemoryView, fatptr: i64, typ: Type) -> Result<S
     Ok(result)
 }
 
+#[cfg(feature = "wasmer")]
 pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
     let mut store = wasmer::Store::default();
     let module = wasmer::Module::new(&store, bytes).map_err(|e| format!("{}", e))?;
@@ -380,6 +388,10 @@ export default async function main() {
     );
 }
 
+function format_float(x) {
+    return x.toPrecision(8).replace(/\.?0+$/, "");
+}
+
 function unwrap_result(result, memory, type = RESULT_TYPE) {
     switch (type) {
         case "Int":
@@ -387,7 +399,7 @@ function unwrap_result(result, memory, type = RESULT_TYPE) {
         case "Bool":
             return result ? "true" : "false";
         case "Float":
-            return result.toPrecision(8);
+            return format_float(result);
         case "Str":
             return unwrap_str(result, memory);
         default:
@@ -408,17 +420,23 @@ function unwrap_complex_type(result, memory, type) {
     const main_type = match[1];
     const subtypes = match[2];
 
-    if (main_type === "Arr") {
-        return unwrap_arr(result, memory, subtypes);
+    switch (main_type) {
+        case "Arr":
+            return unwrap_arr(result, memory, subtypes);
+        case "Iter":
+            return `<iterator over objects of type ${subtypes}>`;
+        case "Func":
+            return `<function with signature ${subtypes.replace("], ", "] -> ")}>`;
+        case "Maybe":
+            return `<maybe value of type ${subtypes}>`;
+        case "TypeDef":
+            const typename_match = /Object\("(.+?)",/.exec(subtypes);
+            return `<constructor for type ${typename_match[1]}>`;
+        case "Object":
+            return unwrap_object(result, memory, subtypes);
+        default:
+            return "<unknown type>";
     }
-    if (main_type === "Iter") {
-        return `<Iterator over objects of type ${subtypes}>`;
-    }
-    if (main_type === "Func") {
-        return `<Function ${subtypes}>`;
-    }
-
-    return "<Unknown type>";
 }
 
 function unwrap_arr(result, memory, subtype) {
@@ -426,10 +444,10 @@ function unwrap_arr(result, memory, subtype) {
     const size = Number(result & 0xFFFFFFFFn);
     let out;
     if (subtype.startsWith("Int")) {
-        out = Array.from(new Uint32Array(memory.buffer, ptr, size / 4));
+        out = Array.from(new Int32Array(memory.buffer, ptr, size / 4));
     }
     else if (subtype.startsWith("Float")) {
-        out = Array.from(new Float32Array(memory.buffer, ptr, size / 4));
+        out = Array.from(new Float32Array(memory.buffer, ptr, size / 4)).map(format_float);
     }
     else if (subtype.startsWith("Func")) {
         const data_arr = new Uint32Array(memory.buffer, ptr, size / 4);
@@ -440,6 +458,36 @@ function unwrap_arr(result, memory, subtype) {
         out = Array.from(data_arr).map((x) => unwrap_result(x, memory, subtype));
     }
     return `[${out.join(", ")}]`;
+}
+
+function unwrap_object(result, memory, subtypes) {
+    const match = /"(.+?)", \[(.+?)\]/.exec(subtypes);
+    const typename = match[1];
+    const fieldtypes = [...match[2].matchAll(/"(\w+)", (\w+)/g)];
+    const fields = [];
+    const memview = new DataView(memory.buffer);
+    let ptr = Number(result >> 32n);
+    for (const [_, field_name, field_type] of fieldtypes) {
+        let value;
+        if (field_type.startsWith("Int")) {
+            value = memview.getInt32(ptr, true);
+            ptr += 4;
+        }
+        else if (field_type.startsWith("Float")) {
+            value = format_float(memview.getFloat32(ptr, true));
+            ptr += 4;
+        }
+        else if (field_type.startsWith("Func")) {
+            value = unwrap_complex_type(memview.getUint32(ptr), memory, field_type);
+            ptr += 4;
+        }
+        else {
+            value = unwrap_result(memview.getBigUint64(ptr), memory, field_type);
+            ptr += 8;
+        }
+        fields.push(`${field_name}: ${value}`);
+    }
+    return `${typename} { ${fields.join(", ")} }`;
 }
 
 document.getElementById("button-run").addEventListener("click", async () => {
@@ -461,7 +509,7 @@ pub fn save_wasm(bytes: &[u8], path: &str, typ: &Type) -> Result<(), String> {
     std::fs::write(format!("{}/index.html", &folder_name), HTML_TEMPLATE).unwrap();
 
     // add the necessary unwrapping code to the JS template, then save it
-    let unwrap_result_type = format!("const RESULT_TYPE = \"{:?}\";", typ);
+    let unwrap_result_type = format!("const RESULT_TYPE = `{:?}`;", typ);
     std::fs::write(format!("{}/index.js", &folder_name), format!("{}{}", unwrap_result_type, JS_TEMPLATE)).unwrap();
 
     Ok(())

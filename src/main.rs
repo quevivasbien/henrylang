@@ -16,7 +16,7 @@ o888o o888o `Y8bod8P' o888o o888o d888b        .8'
 "#;
 
 #[allow(unused_variables)]
-fn repl() {
+fn repl(wasm_run: bool) {
     let mut rl = DefaultEditor::new().unwrap();
     let _ = rl.load_history(HISTORY_FILE);
     rl.bind_sequence(
@@ -34,18 +34,23 @@ fn repl() {
                     break;
                 }
                 rl.add_history_entry(&line).unwrap();
-                #[cfg(not(feature = "wasm_repl"))]
-                match vm.interpret(&line) {
-                    Ok(x) => println!("{}", x),
-                    Err(e) => println!("{}", e),
+                if wasm_run {
+                    #[cfg(feature = "wasmer")]
+                    match wasmize(&line, Env::default()) {
+                        Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+                            Ok(x) => println!("{}", x),
+                            Err(e) => println!("Runtime Error: {}", e),
+                        },
+                        Err(e) => println!("Compile Error: {}", e),
+                    }
+                    #[cfg(not(feature = "wasmer"))]
+                    println!("Cannot run REPL in wasm mode unless compiled with `wasmer` feature ");
                 }
-                #[cfg(feature = "wasm_repl")]
-                match wasmize(&line, Env::default()) {
-                    Ok((bytes, typ)) => match run_wasm(&bytes, typ) {
+                else {
+                    match vm.interpret(&line) {
                         Ok(x) => println!("{}", x),
-                        Err(e) => println!("Runtime Error: {}", e),
-                    },
-                    Err(e) => println!("Compile Error: {}", e),
+                        Err(e) => println!("{}", e),
+                    }
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -97,10 +102,13 @@ fn run_file(path: &str, wasm_run: bool, wasm_save: bool) {
         }
     }
     if wasm_run {
+        #[cfg(feature = "wasmer")]
         match run_wasm(&bytes, result_type) {
             Ok(x) => println!("{}", x),
             Err(e) => println!("Runtime Error: {}", e),
         };
+        #[cfg(not(feature = "wasmer"))]
+        println!("Cannot run wasm unless compiled with `wasmer` feature");
     }
 }
 
@@ -112,11 +120,7 @@ fn main() {
     let wasm_save = flags.iter().any(|x| x == "--save");
     
     if args.len() == 1 {
-        #[cfg(not(feature = "wasm_repl"))]
-        if wasm_run {
-            println!("Note: wasm mode will not apply in the REPL unless compiled with wasm_repl feature enabled");
-        }
-        repl();
+        repl(wasm_run);
     }
     else if args.len() == 2 {
         run_file(&args[1], wasm_run, wasm_save);
@@ -124,7 +128,8 @@ fn main() {
     else {
         println!("Usage: `{}` for REPL or `{} <script> [--build] [--wasm]`", args[0], args[0]);
         println!("Flags:");
-        println!("  --wasm   Compile script to wasm and run it");
-        println!("  --save   Compile script to wasm and save it to <script>.wasm");
+        #[cfg(feature = "wasmer")]
+        println!("  --wasm   Compile to wasm and run it using the Wasmer runtime");
+        println!("  --save   Compile script to wasm and save it to a .wasm file. Does not apply in REPL mode");
     }
 }
