@@ -347,8 +347,7 @@ pub fn run_wasm(bytes: &[u8], typ: Type) -> Result<String, String> {
     Ok(result)
 }
 
-const HTML_TEMPLATE: &str = r#"
-<!DOCTYPE html>
+const HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
@@ -358,8 +357,9 @@ const HTML_TEMPLATE: &str = r#"
 <body>
     <h1>WASM HTML template</h1>
 
-    <button id="button-run">Run WASM</button>
+    <button id="button-run">Re-run WASM</button>
     <p>Result: <span id="result"></span></p>
+    <p>Completed in <span id="time"></span></p>
 
     <script src="index.js" type="module"></script>
 </body>
@@ -490,10 +490,17 @@ function unwrap_object(result, memory, subtypes) {
     return `${typename} { ${fields.join(", ")} }`;
 }
 
-document.getElementById("button-run").addEventListener("click", async () => {
+async function run() {
+    const time_start = performance.now();
     const result = await main();
+    const time_end = performance.now();
     document.getElementById("result").textContent = result;
-});
+    document.getElementById("time").textContent = `${time_end - time_start}ms`;
+}
+
+document.getElementById("button-run").addEventListener("click", run);
+
+run();
 "#;
 
 pub fn save_wasm(bytes: &[u8], path: &str, typ: &Type) -> Result<(), String> {

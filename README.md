@@ -21,9 +21,9 @@ Or install on your machine:
 cargo install --path .
 ```
 
-This will create an executable called `henrylang`. You can run that executable for an interactive interpreter session, or provide a file to run, i.e.,
+This will create an executable called `henrylang`. You can run that executable for an interactive interpreter session, or provide a file to run:
 ```bash
-henrylang script.hl
+henrylang <script_name>
 ```
 
 ## Compilation to WASM
@@ -32,7 +32,7 @@ If you want to compile code to be run in a web environment, you can provide the 
 ```bash
 henrylang script.hl --save
 ```
-will create a directory called `script_wasm` that contains 3 files: an `index.html`, `index.js`, and `module.wasm`. You can open `index.html` in a web browser to see a simple example that loads and runs the web assembly module and displays the result.
+will create a directory called `wasm_script` that contains 3 files: an `index.html`, `index.js`, and `module.wasm`. You can start a local server and open this in a web browser to see a simple example that loads and runs the web assembly module and displays the result.
 
 There is also the option to run web assembly code using the Wasmer runtime. To allow this, you'll need to compile with the `wasmer` feature enabled: e.g.,
 ```bash
@@ -88,7 +88,7 @@ f := |x: Int| {
     x * x + 2
 }
 
-f(4)
+f(4)  ? 18
 ```
 
 ### Compute a sum in two different ways
@@ -97,7 +97,7 @@ mysum := |iter: Iter(Int)| {
     reduce(|acc, x| { acc + x }, iter, 0)
 }
 
-mysum(0 to 10) = sum(0 to 10)
+mysum(0 to 10) = sum(0 to 10)  ? true
 ```
 
 ### Find prime numbers
@@ -110,7 +110,7 @@ is_prime := |n: Int| {
     }
 }
 
-filter(is_prime, 2 to 100)
+@filter(is_prime, 2 to 100)  ? [2, 3, 5, 7, ..., 97]
 ```
 
 ### Create a custom type
@@ -122,7 +122,7 @@ norm := |x: Complex| {
 }
 
 x := Complex(1.0, -1.0)
-norm(x)
+norm(x)  ? 1.4142135
 ```
 
 ### Pass a function to a function
@@ -131,5 +131,14 @@ func_sum := |f: Func(Int, Int), g: Func(Int, Int), x: Int| {
     f(x) + g(x)
 }
 
-func_sum(|x: Int|{ x + 1 }, |x: Int|{ x + 2 }, 1)
+func_sum(|x: Int|{ x + 1 }, |x: Int|{ x + 2 }, 1)  ? 5
+```
+
+### Overload a function
+```
+pow := |a: Str, b: Int| {
+    reduce(|acc: Str, _: Int| { acc + a }, 1 to b, "")
+}
+
+pow("Hi", 3) = "HiHiHi" and pow(2, 3) = 8  ? true
 ```
